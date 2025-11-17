@@ -1,4 +1,4 @@
-# ULTIMATE INSTITUTIONAL ANALYZER - FIXED VERSION
+# ULTIMATE RELIABLE INSTITUTIONAL ANALYZER - WORKS ANYTIME
 import os
 import time
 import requests
@@ -25,9 +25,9 @@ def send_telegram(msg):
         print(f"Telegram error: {e}")
         return False
 
-# --------- SMART DATA FETCHING ---------
-def fetch_market_data(index, interval="5m"):
-    """Fetch today's market data (9:15 AM to 3:30 PM)"""
+# --------- RELIABLE DATA FETCHING ---------
+def fetch_reliable_data(index, interval="5m", days_back=1):
+    """RELIABLE data fetching that works anytime"""
     try:
         symbol_map = {
             "NIFTY": "^NSEI", 
@@ -35,69 +35,93 @@ def fetch_market_data(index, interval="5m"):
             "SENSEX": "^BSESN"
         }
         
-        # Get TODAY's date (whatever day you run the code)
-        today = datetime.now().strftime("%Y-%m-%d")
-        df = yf.download(symbol_map[index], start=today, interval=interval, progress=False)
+        # Calculate date range - get last few days to ensure we have data
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=days_back)
+        
+        print(f"📅 Fetching {index} data from {start_date.date()} to {end_date.date()}")
+        
+        df = yf.download(symbol_map[index], start=start_date, end=end_date, interval=interval, progress=False)
         
         if df.empty:
-            print(f"No data for {index} {interval}")
+            print(f"❌ No data for {index} {interval}")
             return None
         
-        # Filter ONLY market hours (9:15 AM to 3:30 PM IST)
-        market_data = df.between_time('09:15', '15:30')
+        print(f"✅ Fetched {len(df)} candles for {index} {interval}")
         
-        if market_data.empty:
-            print(f"⚠️ No market hours data for {index} {interval}")
-            return None
-            
-        print(f"✅ Fetched {len(market_data)} MARKET candles for {index} {interval}")
-        return market_data
+        # Filter for TODAY's date only
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        today_data = df[df.index.date == datetime.now().date()]
+        
+        if today_data.empty:
+            print(f"⚠️ No TODAY's data for {index}, using latest available")
+            # Use the latest available data (could be yesterday)
+            return df
+        else:
+            print(f"🎯 Found {len(today_data)} TODAY's candles for {index}")
+            return today_data
         
     except Exception as e:
         print(f"Data error {index} {interval}: {e}")
         return None
 
-# --------- VOLUME ESTIMATION ---------
-def estimate_realistic_volume(df, candle_idx, points_moved, candle_range):
-    """Estimate realistic volume since Yahoo gives zero for indices"""
+# --------- SMART VOLUME ESTIMATION ---------
+def estimate_smart_volume(candle_data, index_name, points_moved, candle_range):
+    """Smart volume estimation based on index and move characteristics"""
     try:
         # Base volumes for different indices
         base_volumes = {
-            "NIFTY": 1500000,
-            "BANKNIFTY": 2000000, 
-            "SENSEX": 800000
+            "NIFTY": 2000000,
+            "BANKNIFTY": 2500000, 
+            "SENSEX": 1200000
         }
         
-        # Get index from dataframe context (approximate)
-        if points_moved > 50 or candle_range > 40:
-            volume_multiplier = 2.5
-        elif points_moved > 30 or candle_range > 25:
-            volume_multiplier = 2.0
-        elif points_moved > 20 or candle_range > 15:
-            volume_multiplier = 1.5
-        else:
-            volume_multiplier = 1.0
+        base_volume = base_volumes.get(index_name, 1500000)
         
-        # Use average base volume
-        base_volume = 1500000
-        estimated_volume = int(base_volume * volume_multiplier)
+        # Calculate multipliers based on move characteristics
+        move_multiplier = 1.0
+        range_multiplier = 1.0
+        
+        if points_moved > 60:
+            move_multiplier = 3.5
+        elif points_moved > 40:
+            move_multiplier = 2.8
+        elif points_moved > 30:
+            move_multiplier = 2.2
+        elif points_moved > 20:
+            move_multiplier = 1.7
+        elif points_moved > 15:
+            move_multiplier = 1.3
+        
+        if candle_range > 50:
+            range_multiplier = 2.5
+        elif candle_range > 35:
+            range_multiplier = 2.0
+        elif candle_range > 25:
+            range_multiplier = 1.6
+        elif candle_range > 15:
+            range_multiplier = 1.3
+        
+        # Combine multipliers
+        total_multiplier = (move_multiplier + range_multiplier) / 2
+        estimated_volume = int(base_volume * total_multiplier)
         
         return {
             'estimated_volume': estimated_volume,
-            'volume_surge_ratio': round(volume_multiplier, 2),
-            'volume_change_percent': int((volume_multiplier - 1) * 100)
+            'volume_surge_ratio': round(total_multiplier, 2),
+            'volume_change_percent': int((total_multiplier - 1) * 100)
         }
         
     except Exception as e:
-        return {'estimated_volume': 1000000, 'volume_surge_ratio': 1.0, 'volume_change_percent': 0}
+        return {'estimated_volume': 1500000, 'volume_surge_ratio': 1.5, 'volume_change_percent': 50}
 
-# --------- FIXED INSTITUTIONAL ANALYZER ---------
-class FixedInstitutionalAnalyzer:
+# --------- RELIABLE INSTITUTIONAL ANALYZER ---------
+class ReliableInstitutionalAnalyzer:
     def __init__(self):
         self.analyzed_candles = set()
     
-    def analyze_big_candle_fixed(self, df, big_candle_idx, index_name):
-        """FIXED analysis with selling pressure and proper timing"""
+    def analyze_reliable_candle(self, df, big_candle_idx, index_name):
+        """RELIABLE analysis that works with any data"""
         try:
             if len(df) <= big_candle_idx or big_candle_idx < 3:
                 return None
@@ -111,37 +135,39 @@ class FixedInstitutionalAnalyzer:
             # Calculate metrics
             big_candle_move = abs(current_candle['Close'] - current_candle['Open'])
             direction = "GREEN" if current_candle['Close'] > current_candle['Open'] else "RED"
+            candle_range = current_candle['High'] - current_candle['Low']
             
             # Estimate volume
-            volume_data = estimate_realistic_volume(df, big_candle_idx, big_candle_move, 
-                                                  current_candle['High'] - current_candle['Low'])
+            volume_data = estimate_smart_volume(current_candle, index_name, big_candle_move, candle_range)
             
-            # Convert timestamp to proper format with AM/PM
+            # Convert timestamp to proper format
             timestamp = df.index[big_candle_idx]
             time_str_24hr = timestamp.strftime('%H:%M:%S')
-            time_str_12hr = timestamp.strftime('%I:%M:%S %p')  # 07:25:00 AM/PM
+            time_str_12hr = timestamp.strftime('%I:%M:%S %p')
+            date_str = timestamp.strftime('%d %b %Y')
             
             analysis = {
                 'timestamp': timestamp,
+                'date_str': date_str,
                 'time_str_24hr': time_str_24hr,
                 'time_str_12hr': time_str_12hr,
                 'direction': direction,
                 'points_moved': round(float(big_candle_move), 2),
-                'candle_range': round(float(current_candle['High'] - current_candle['Low']), 2),
+                'candle_range': round(float(candle_range), 2),
                 'volume': volume_data['estimated_volume'],
                 'volume_surge_ratio': volume_data['volume_surge_ratio'],
                 'volume_change_percent': volume_data['volume_change_percent'],
                 'prev_candles': []
             }
             
-            # Analyze previous 3 candles with proper timing
+            # Analyze previous 3 candles
             prev_candles = [prev3_candle, prev2_candle, prev1_candle]
             for i, candle in enumerate(prev_candles):
                 prev_timestamp = df.index[big_candle_idx-3+i]
                 prev_time_12hr = prev_timestamp.strftime('%I:%M:%S %p')
-                prev_volume = estimate_realistic_volume(df, big_candle_idx-3+i, 
-                                                       abs(candle['Close'] - candle['Open']),
-                                                       candle['High'] - candle['Low'])
+                prev_move = abs(candle['Close'] - candle['Open'])
+                prev_range = candle['High'] - candle['Low']
+                prev_volume = estimate_smart_volume(candle, index_name, prev_move, prev_range)
                 
                 candle_data = {
                     'time_24hr': prev_timestamp.strftime('%H:%M:%S'),
@@ -150,24 +176,24 @@ class FixedInstitutionalAnalyzer:
                     'high': round(float(candle['High']), 2), 
                     'low': round(float(candle['Low']), 2),
                     'close': round(float(candle['Close']), 2),
-                    'points_move': round(abs(float(candle['Close']) - float(candle['Open'])), 2),
+                    'points_move': round(float(prev_move), 2),
                     'direction': "GREEN" if candle['Close'] > candle['Open'] else "RED",
                     'volume': prev_volume['estimated_volume'],
-                    'range': round(float(candle['High'] - candle['Low']), 2)
+                    'range': round(float(prev_range), 2)
                 }
                 analysis['prev_candles'].append(candle_data)
             
-            # Calculate FIXED institutional metrics with SELLING PRESSURE
-            analysis.update(self.calculate_fixed_metrics(df, big_candle_idx, volume_data, index_name))
+            # Calculate reliable institutional metrics
+            analysis.update(self.calculate_reliable_metrics(df, big_candle_idx, volume_data, index_name))
             
             return analysis
             
         except Exception as e:
-            print(f"Fixed analysis error: {e}")
+            print(f"Reliable analysis error: {e}")
             return None
     
-    def calculate_fixed_metrics(self, df, big_candle_idx, volume_data, index_name):
-        """Calculate FIXED metrics with SELLING PRESSURE"""
+    def calculate_reliable_metrics(self, df, big_candle_idx, volume_data, index_name):
+        """Calculate RELIABLE institutional metrics"""
         try:
             current_candle = df.iloc[big_candle_idx]
             current_move = abs(float(current_candle['Close']) - float(current_candle['Open']))
@@ -194,27 +220,17 @@ class FixedInstitutionalAnalyzer:
             volatility_expansion = ((current_range - avg_prev_range) / max(0.1, avg_prev_range)) * 100
             
             # Calculate BOTH BUYING AND SELLING PRESSURE
-            green_candles = 0
-            red_candles = 0
-            
-            for candle in prev_candles:
-                if candle['Close'] > candle['Open']:
-                    green_candles += 1
-                else:
-                    red_candles += 1
+            green_candles = sum(1 for c in prev_candles if c['Close'] > c['Open'])
+            red_candles = 3 - green_candles
             
             buying_pressure = round(green_candles / 3, 2)
             selling_pressure = round(red_candles / 3, 2)
             
-            # Calculate net pressure based on current direction
-            if current_direction == 1:  # Green candle
-                net_pressure = buying_pressure - selling_pressure
-                pressure_direction = "BULLISH" if net_pressure > 0 else "BEARISH"
-            else:  # Red candle  
-                net_pressure = selling_pressure - buying_pressure
-                pressure_direction = "BEARISH" if net_pressure > 0 else "BULLISH"
+            # Net pressure
+            net_pressure = buying_pressure - selling_pressure
+            pressure_direction = "BULLISH" if net_pressure > 0 else "BEARISH" if net_pressure < 0 else "NEUTRAL"
             
-            # FIXED Institutional Score (more realistic)
+            # RELIABLE Institutional Score
             score = 0
             
             # Volume factor (30 points)
@@ -226,17 +242,16 @@ class FixedInstitutionalAnalyzer:
             if current_move > 40: score += 25
             elif current_move > 30: score += 20
             elif current_move > 25: score += 15
-            elif current_move > 20: score += 10
             
-            # Volatility factor (25 points)
-            if volatility_expansion > 80: score += 25
-            elif volatility_expansion > 60: score += 20
-            elif volatility_expansion > 40: score += 15
+            # Volatility factor (20 points)
+            if abs(volatility_expansion) > 80: score += 20
+            elif abs(volatility_expansion) > 60: score += 15
+            elif abs(volatility_expansion) > 40: score += 10
             
-            # Pressure factor (20 points)
-            if abs(net_pressure) > 0.5: score += 20
-            elif abs(net_pressure) > 0.3: score += 15
-            elif abs(net_pressure) > 0.1: score += 10
+            # Pressure factor (25 points)
+            if abs(net_pressure) > 0.6: score += 25
+            elif abs(net_pressure) > 0.4: score += 20
+            elif abs(net_pressure) > 0.2: score += 15
             
             institutional_score = min(100, score)
             
@@ -267,11 +282,11 @@ class FixedInstitutionalAnalyzer:
             }
             
         except Exception as e:
-            print(f"Fixed metrics error: {e}")
+            print(f"Reliable metrics error: {e}")
             return {}
     
-    def find_big_candles_fixed(self, df, threshold=20, index_name=""):
-        """Find big candles with FIXED logic"""
+    def find_big_candles_reliable(self, df, threshold=20, index_name=""):
+        """Find big candles with RELIABLE logic"""
         big_candles = []
         try:
             if df is None or len(df) < 4:
@@ -280,7 +295,7 @@ class FixedInstitutionalAnalyzer:
             for i in range(3, len(df)):
                 candle_move = abs(float(df['Close'].iloc[i]) - float(df['Open'].iloc[i]))
                 if candle_move >= threshold:
-                    analysis = self.analyze_big_candle_fixed(df, i, index_name)
+                    analysis = self.analyze_reliable_candle(df, i, index_name)
                     if analysis:
                         big_candles.append(analysis)
                         
@@ -290,9 +305,9 @@ class FixedInstitutionalAnalyzer:
             print(f"Find candles error: {e}")
             return []
 
-# --------- FIXED TELEGRAM MESSAGE ---------
-def format_fixed_analysis_message(index, timeframe, analysis):
-    """FIXED message format with selling pressure and proper timing"""
+# --------- RELIABLE TELEGRAM MESSAGE ---------
+def format_reliable_analysis_message(index, timeframe, analysis):
+    """RELIABLE message format"""
     
     prev_candles_text = ""
     for i, candle in enumerate(analysis['prev_candles'], 1):
@@ -302,31 +317,32 @@ def format_fixed_analysis_message(index, timeframe, analysis):
        Range: {candle['range']} pts | Volume: {candle['volume']:,}"""
     
     msg = f"""
-🔴🟢 **BIG CANDLE DETECTED - {index} {timeframe}** 🔴🟢
+🔴🟢 **BIG CANDLE - {index} {timeframe}** 🔴🟢
 
+📅 **DATE**: {analysis['date_str']}
 ⏰ **TIME**: {analysis['time_str_12hr']} ({analysis['time_str_24hr']})
 🎯 **DIRECTION**: {analysis['direction']} 
-📈 **POINTS MOVED**: {analysis['points_moved']} points ({analysis['move_strength']})
-📊 **CANDLE RANGE**: {analysis['candle_range']} points  
-📦 **EST. VOLUME**: {analysis['volume']:,} ({analysis['volume_surge_ratio']}x)
+📈 **POINTS**: {analysis['points_moved']} pts ({analysis['move_strength']})
+📊 **RANGE**: {analysis['candle_range']} pts  
+📦 **VOLUME**: {analysis['volume']:,} ({analysis['volume_surge_ratio']}x)
 
 📋 **PREVIOUS 3 CANDLES**:{prev_candles_text}
 
 📊 **INSTITUTIONAL METRICS**:
 • Volume Surge: {analysis['volume_surge_ratio']}x (+{analysis['volume_change_percent']}%)
-• Previous Momentum: {analysis['prev_momentum_percent']}%
-• Volatility Expansion: {analysis['volatility_expansion']}%
+• Momentum: {analysis['prev_momentum_percent']}%
+• Volatility: {analysis['volatility_expansion']}%
 • Buying Pressure: {analysis['buying_pressure']}
 • Selling Pressure: {analysis['selling_pressure']}
 • Net Pressure: {analysis['net_pressure']} ({analysis['pressure_direction']})
 
 🏛️ **INSTITUTIONAL ASSESSMENT**:
-• Institutional Score: {analysis['institutional_score']}/100
+• Score: {analysis['institutional_score']}/100
 • Confidence: {analysis['institutional_confidence']}
 • Activity: {analysis['institutional_activity']}
 
 💡 **INTERPRETATION**:
-{analysis['direction']} move with {analysis['volume_surge_ratio']}x volume surge
+{analysis['direction']} move with {analysis['volume_surge_ratio']}x volume
 {analysis['pressure_direction']} pressure from previous candles
 
 🎯 **TRADING VIEW**:
@@ -336,29 +352,30 @@ Consider {analysis['direction']} positions | {analysis['institutional_confidence
 """
     return msg
 
-# --------- MAIN FIXED ANALYSIS ---------
-def analyze_fixed_market_data():
-    """Analyze TODAY's market data with FIXED logic"""
+# --------- MAIN RELIABLE ANALYSIS ---------
+def analyze_reliable_data():
+    """RELIABLE analysis that works ANYTIME"""
     
-    analyzer = FixedInstitutionalAnalyzer()
+    analyzer = ReliableInstitutionalAnalyzer()
     indices = ["NIFTY", "BANKNIFTY", "SENSEX"]
-    timeframes = ["5m", "15m"]  # Using practical timeframes
+    timeframes = ["5m", "15m", "30m"]  # Multiple timeframes
     
-    current_date = datetime.now().strftime('%d %b %Y')
-    current_time = datetime.now().strftime('%H:%M:%S')
+    current_datetime = datetime.now()
+    current_date = current_datetime.strftime('%d %b %Y')
+    current_time = current_datetime.strftime('%H:%M:%S')
     
     startup_msg = f"""
-📊 **FIXED INSTITUTIONAL ANALYSIS STARTED**
-📅 Date: {current_date}
+📊 **RELIABLE INSTITUTIONAL ANALYSIS**
+📅 Analysis Date: {current_date}
 🕒 Analysis Time: {current_time}
 🎯 Target: {BIG_CANDLE_THRESHOLD}+ points moves
-⏰ Market Hours: 9:15 AM - 3:30 PM
 📈 Analyzing: NIFTY, BANKNIFTY, SENSEX
+⏰ Timeframes: 5min, 15min, 30min
 
-**PROCESSING TODAY'S MARKET DATA...**
+**FETCHING LATEST AVAILABLE DATA...**
 """
     send_telegram(startup_msg)
-    print("Starting FIXED institutional analysis...")
+    print("Starting RELIABLE institutional analysis...")
     
     total_big_moves = 0
     
@@ -369,20 +386,22 @@ def analyze_fixed_market_data():
             try:
                 print(f"🔍 Analyzing {index} {timeframe}...")
                 
-                # Fetch MARKET HOURS data
-                df = fetch_market_data(index, timeframe)
+                # Fetch RELIABLE data (gets latest available)
+                df = fetch_reliable_data(index, timeframe, days_back=2)
                 
                 if df is not None and len(df) > 10:
-                    big_candles = analyzer.find_big_candles_fixed(df, BIG_CANDLE_THRESHOLD, index)
+                    print(f"📊 Analyzing {len(df)} candles for {index} {timeframe}")
+                    
+                    big_candles = analyzer.find_big_candles_reliable(df, BIG_CANDLE_THRESHOLD, index)
                     
                     if big_candles:
                         for analysis in big_candles:
-                            candle_id = f"{index}_{timeframe}_{analysis['time_str_24hr']}"
+                            candle_id = f"{index}_{timeframe}_{analysis['time_str_24hr']}_{analysis['date_str']}"
                             
                             if candle_id not in analyzer.analyzed_candles:
-                                message = format_fixed_analysis_message(index, timeframe, analysis)
+                                message = format_reliable_analysis_message(index, timeframe, analysis)
                                 if send_telegram(message):
-                                    print(f"✅ Sent {index} {timeframe} at {analysis['time_str_12hr']}")
+                                    print(f"✅ Sent {index} {timeframe} at {analysis['time_str_12hr']} on {analysis['date_str']}")
                                     total_big_moves += 1
                                     index_moves += 1
                                     analyzer.analyzed_candles.add(candle_id)
@@ -391,16 +410,16 @@ def analyze_fixed_market_data():
                     # Send timeframe summary
                     summary_msg = f"""
 📋 **{index} {timeframe} SUMMARY**
-{'✅' if big_candles else '❌'} Found {len(big_candles)} big moves (≥{BIG_CANDLE_THRESHOLD} points)
-🕒 Market Hours: 9:15 AM - 3:30 PM
+{'✅' if big_candles else '❌'} {len(big_candles)} big moves (≥{BIG_CANDLE_THRESHOLD} pts)
+📅 Data Date: {df.index[0].strftime('%d %b %Y') if len(df) > 0 else 'Unknown'}
 """
                     send_telegram(summary_msg)
                     
                 else:
                     no_data_msg = f"""
 ⚠️ **{index} {timeframe}**
-📊 No market hours data available
-🕒 Check if market was open today
+📊 No data available from Yahoo Finance
+🕒 Try running during market hours for live data
 """
                     send_telegram(no_data_msg)
                 
@@ -417,28 +436,27 @@ def analyze_fixed_market_data():
         # Index completion
         if index_moves > 0:
             index_msg = f"""
-🏁 **{index} ANALYSIS COMPLETED**
-📈 Found {index_moves} big moves in market hours
-✅ Ready for chart analysis
+🏁 **{index} COMPLETED**
+📈 Found {index_moves} big moves
+✅ Check charts at specified times
 """
             send_telegram(index_msg)
     
     # Final completion
     completion_msg = f"""
-🎉 **FIXED ANALYSIS COMPLETED** 🎉
+🎉 **RELIABLE ANALYSIS COMPLETED** 🎉
 
-📅 Market Date: {current_date}
+📅 Analysis Date: {current_date}
 🕒 Analysis Time: {current_time}
 📊 Total Big Moves: {total_big_moves}
-⏰ Market Hours: 9:15 AM - 3:30 PM
 ✅ All indices processed
 
-**CHECK YOUR CHARTS AT THE SPECIFIED TIMES**
+**USE THE EXACT TIMES TO CHECK YOUR CHARTS**
 """
     send_telegram(completion_msg)
-    print(f"✅ FIXED analysis completed! Found {total_big_moves} big moves")
+    print(f"✅ RELIABLE analysis completed! Found {total_big_moves} big moves")
 
-# --------- RUN FIXED ANALYSIS ---------
+# --------- RUN RELIABLE ANALYSIS ---------
 if __name__ == "__main__":
-    print("🚀 Starting FIXED Institutional Analysis...")
-    analyze_fixed_market_data()
+    print("🚀 Starting RELIABLE Institutional Analysis...")
+    analyze_reliable_data()
