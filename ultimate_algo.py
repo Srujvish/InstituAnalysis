@@ -1,4 +1,4 @@
-# INSTITUTIONAL PRESSURE ANALYZER - 16th NOV 2025 SPECIFIC
+# TRUE INSTITUTIONAL PRESSURE ANALYZER - ENHANCED VERSION complete inst with volume surge and thing 
 import os
 import time
 import requests
@@ -29,13 +29,31 @@ def send_telegram(msg):
         print(f"Telegram error: {e}")
         return False
 
-# --------- SPECIFIC DATE SELECTION - 16th NOV 2025 ---------
-def get_specific_analysis_date():
-    """Force analysis for 16th November 2025"""
-    specific_date = datetime(2025, 11, 16).date()
-    market_status = "SPECIFIC_DATE_ANALYSIS_16_NOV_2025"
+# --------- SMART DATE SELECTION ---------
+def get_analysis_date():
+    """Get the correct date for analysis - today if market open, else last trading day"""
+    now_ist = datetime.now(IST)
     
-    return specific_date, market_status
+    # Check if market is open today (Monday to Friday, 9:15 AM - 3:30 PM IST)
+    if now_ist.weekday() < 5:  # Monday to Friday
+        market_open = now_ist.replace(hour=9, minute=15, second=0, microsecond=0)
+        market_close = now_ist.replace(hour=15, minute=30, second=0, microsecond=0)
+        
+        # If current time is after market open, analyze today
+        if now_ist >= market_open:
+            analysis_date = now_ist.date()
+            market_status = "LIVE_MARKET" if now_ist <= market_close else "TODAYS_CLOSED_MARKET"
+        else:
+            # Before market open, analyze previous trading day
+            analysis_date = (now_ist - timedelta(days=1)).date()
+            market_status = "PREVIOUS_DAY_ANALYSIS"
+    else:
+        # Weekend - analyze last Friday
+        days_back = 1 if now_ist.weekday() == 5 else 2  # Saturday or Sunday
+        analysis_date = (now_ist - timedelta(days=days_back)).date()
+        market_status = "WEEKEND_ANALYSIS"
+    
+    return analysis_date, market_status
 
 # --------- SAFE DATA FETCHING ---------
 def fetch_historical_data_safe(index, analysis_date, interval="1m"):
@@ -106,7 +124,7 @@ class TrueInstitutionalAnalyzer:
     def analyze_big_candle_institutional(self, df, big_candle_idx):
         """TRUE INSTITUTIONAL ANALYSIS - Real pressure detection"""
         try:
-            if len(df) <= big_candle_idx or big_candle_idx < 5:
+            if len(df) <= big_candle_idx or big_candle_idx < 5:  # Increased to 5 for better analysis
                 return None
             
             # Get candle data with more context
@@ -114,8 +132,8 @@ class TrueInstitutionalAnalyzer:
             prev1_row = df.iloc[big_candle_idx-1]
             prev2_row = df.iloc[big_candle_idx-2]  
             prev3_row = df.iloc[big_candle_idx-3]
-            prev4_row = df.iloc[big_candle_idx-4]
-            prev5_row = df.iloc[big_candle_idx-5]
+            prev4_row = df.iloc[big_candle_idx-4]  # Additional context
+            prev5_row = df.iloc[big_candle_idx-5]  # Additional context
             
             # Convert to scalar values
             current_open = safe_float(current_row['Open'])
@@ -176,7 +194,7 @@ class TrueInstitutionalAnalyzer:
             # Calculate TRUE institutional pressure metrics
             analysis.update(self.calculate_true_institutional_pressure(
                 current_open, current_high, current_low, current_close, current_volume,
-                [prev5_row, prev4_row, prev3_row, prev2_row, prev1_row],
+                [prev5_row, prev4_row, prev3_row, prev2_row, prev1_row],  # More context
                 direction
             ))
             
@@ -212,7 +230,7 @@ class TrueInstitutionalAnalyzer:
                 prev_ranges.append(prev_high - prev_low)
             
             # FIXED: Better volume simulation for institutional analysis
-            base_volume = 50000
+            base_volume = 50000  # Higher base for institutional context
             
             if curr_volume == 0:
                 # Institutional volume simulation based on price action intensity
@@ -220,6 +238,7 @@ class TrueInstitutionalAnalyzer:
                 range_size = curr_high - curr_low
                 volatility = range_size / curr_open if curr_open > 0 else 0
                 
+                # Institutional trades have higher volume during significant moves
                 movement_intensity = (price_movement / curr_open * 100) if curr_open > 0 else 0
                 volatility_factor = volatility * 100
                 
@@ -247,7 +266,7 @@ class TrueInstitutionalAnalyzer:
             avg_prev_volume = np.mean(synthetic_prev_volumes) if synthetic_prev_volumes else base_volume
             volume_surge_ratio = round(curr_volume / max(1, avg_prev_volume), 2)
             
-            # Institutional volume thresholds
+            # Institutional volume thresholds (much higher than retail)
             if volume_surge_ratio > 3.0:
                 volume_pressure = "VERY_HIGH"
             elif volume_surge_ratio > 2.0:
@@ -257,7 +276,7 @@ class TrueInstitutionalAnalyzer:
             else:
                 volume_pressure = "LOW"
             
-            # 2. Price Efficiency Analysis
+            # 2. Price Efficiency Analysis (Institutional vs Retail)
             current_efficiency = abs(curr_close - curr_open) / (curr_high - curr_low) if (curr_high - curr_low) > 0 else 0
             prev_efficiencies = []
             
@@ -269,6 +288,7 @@ class TrueInstitutionalAnalyzer:
             avg_prev_efficiency = np.mean(prev_efficiencies) if prev_efficiencies else current_efficiency
             efficiency_ratio = round(current_efficiency / max(0.01, avg_prev_efficiency), 2)
             
+            # High efficiency = institutional (clean moves), Low efficiency = retail (choppy)
             if efficiency_ratio > 1.3:
                 efficiency_pressure = "INSTITUTIONAL"
             elif efficiency_ratio > 0.8:
@@ -283,7 +303,7 @@ class TrueInstitutionalAnalyzer:
                 
                 momentum_alignment = abs(short_momentum - medium_momentum)
                 
-                if momentum_alignment < 0.05:
+                if momentum_alignment < 0.05:  # Aligned momentum
                     momentum_pressure = "STRONG"
                 elif momentum_alignment < 0.1:
                     momentum_pressure = "MODERATE"
@@ -292,7 +312,7 @@ class TrueInstitutionalAnalyzer:
             else:
                 momentum_pressure = "NEUTRAL"
             
-            # 4. Range Expansion Analysis
+            # 4. Range Expansion Analysis (Institutional volatility)
             current_range_pct = (curr_high - curr_low) / curr_open * 100 if curr_open > 0 else 0
             avg_prev_range_pct = np.mean([(r/prev_opens[i]*100) for i, r in enumerate(prev_ranges) if prev_opens[i] > 0]) if prev_opens else current_range_pct
             
@@ -310,7 +330,7 @@ class TrueInstitutionalAnalyzer:
             # 5. TRUE INSTITUTIONAL PRESSURE SCORING
             score = 0
             
-            # Volume scoring
+            # Volume scoring (institutional focus)
             if volume_surge_ratio > 3.0: score += 40
             elif volume_surge_ratio > 2.0: score += 30
             elif volume_surge_ratio > 1.5: score += 20
@@ -326,7 +346,7 @@ class TrueInstitutionalAnalyzer:
             # Volatility scoring
             if "INSTITUTIONAL" in volatility_pressure: score += 15
             
-            # Candle size scoring
+            # Candle size scoring (institutional moves are larger)
             candle_size = abs(curr_close - curr_open)
             if candle_size > 50: score += 20
             elif candle_size > 30: score += 15
@@ -394,10 +414,10 @@ class TrueInstitutionalAnalyzer:
         """Find all big candles with institutional analysis"""
         big_candles = []
         try:
-            if df is None or len(df) < 6:
+            if df is None or len(df) < 6:  # Increased minimum
                 return big_candles
                 
-            for i in range(5, len(df)):
+            for i in range(5, len(df)):  # Start from 5 for better context
                 try:
                     # SAFE candle move calculation
                     row = df.iloc[i]
@@ -410,7 +430,7 @@ class TrueInstitutionalAnalyzer:
                         if analysis:
                             big_candles.append(analysis)
                 except Exception as e:
-                    continue
+                    continue  # Skip problematic candles
                         
             return big_candles
             
@@ -470,22 +490,22 @@ True Activity: {analysis['true_institutional_activity']}
 """
     return msg
 
-# --------- MAIN INSTITUTIONAL ANALYSIS FUNCTION FOR 16th NOV 2025 ---------
-def analyze_16_nov_2025_data():
-    """TRUE institutional pressure analysis for 16th November 2025"""
+# --------- MAIN INSTITUTIONAL ANALYSIS FUNCTION ---------
+def analyze_true_institutional_data():
+    """TRUE institutional pressure analysis"""
     
     analyzer = TrueInstitutionalAnalyzer()
     indices = ["NIFTY", "BANKNIFTY", "SENSEX"]
     timeframes = ["1m", "5m"]
     
-    # Get specific analysis date - 16th November 2025
-    analysis_date, market_status = get_specific_analysis_date()
+    # Get smart analysis date
+    analysis_date, market_status = get_analysis_date()
     
     # Start timer
     start_time = time.time()
     
     startup_msg = f"""
-🏛️ **INSTITUTIONAL ANALYSIS FOR 16th NOV 2025 STARTED**
+🏛️ **TRUE INSTITUTIONAL PRESSURE ANALYSIS STARTED**
 📅 Analysis Date: {analysis_date.strftime('%d %b %Y')}
 🎯 Target: {BIG_CANDLE_THRESHOLD}+ points moves
 📈 Analyzing: NIFTY, BANKNIFTY, SENSEX
@@ -495,7 +515,7 @@ def analyze_16_nov_2025_data():
 **DETECTING REAL INSTITUTIONAL ACTIVITY...**
 """
     send_telegram(startup_msg)
-    print(f"Starting institutional analysis for {analysis_date}...")
+    print(f"Starting true institutional analysis for {analysis_date}...")
     
     total_big_moves = 0
     total_analyzed = 0
@@ -505,7 +525,7 @@ def analyze_16_nov_2025_data():
         
         for timeframe in timeframes:
             try:
-                print(f"🏛️ Analyzing {index} {timeframe} for 16th Nov 2025...")
+                print(f"🏛️ Analyzing {index} {timeframe} for institutional pressure...")
                 
                 # Fetch historical data
                 df = fetch_historical_data_safe(index, analysis_date, timeframe)
@@ -565,7 +585,7 @@ def analyze_16_nov_2025_data():
     
     # Final completion message
     completion_msg = f"""
-🎉 **16th NOV 2025 INSTITUTIONAL ANALYSIS FINISHED** 🎉
+🎉 **TRUE INSTITUTIONAL ANALYSIS FINISHED** 🎉
 
 📅 Analysis Date: {analysis_date.strftime('%d %b %Y')}
 🕒 Finished: {datetime.now(IST).strftime('%H:%M:%S IST')}
@@ -574,15 +594,15 @@ def analyze_16_nov_2025_data():
 ⏱️ Analysis Time: {analysis_time} seconds
 📊 Market Status: {market_status}
 
-✅ **ANALYSIS COMPLETED - PROGRAM STOPPED**
+✅ **ALL INSTITUTIONAL ANALYSIS COMPLETED - PROGRAM STOPPED**
 
-**Ready for 16th Nov 2025 institutional activity analysis**
+**Ready for detecting real institutional activity**
 """
     send_telegram(completion_msg)
-    print(f"✅ 16th Nov 2025 analysis finished! Found {total_big_moves} moves in {analysis_time} seconds")
+    print(f"✅ True institutional analysis finished! Found {total_big_moves} moves in {analysis_time} seconds")
 
-# --------- RUN 16th NOV 2025 ANALYSIS ---------
+# --------- RUN TRUE INSTITUTIONAL ANALYSIS ---------
 if __name__ == "__main__":
-    print("🏛️ Starting Institutional Analysis for 16th November 2025...")
-    analyze_16_nov_2025_data()
-    print("🛑 Program stopped automatically after completing 16th Nov 2025 analysis")
+    print("🏛️ Starting True Institutional Pressure Analysis...")
+    analyze_true_institutional_data()
+    print("🛑 Program stopped automatically after completing all institutional analysis")
