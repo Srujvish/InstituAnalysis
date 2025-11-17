@@ -1,4 +1,4 @@
-# ULTIMATE ERROR-FREE HISTORICAL INSTITUTIONAL ANALYZER - FIXED VERSION
+# TRUE INSTITUTIONAL PRESSURE ANALYZER - ENHANCED VERSION
 import os
 import time
 import requests
@@ -15,7 +15,6 @@ warnings.filterwarnings("ignore")
 BIG_CANDLE_THRESHOLD = 20
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-MAX_ANALYSIS_TIME = 120  # Auto-stop after 120 seconds (2 minutes)
 
 # Timezone setup
 IST = pytz.timezone('Asia/Kolkata')
@@ -117,24 +116,26 @@ def safe_int(value):
     except:
         return 0
 
-# --------- FIXED INSTITUTIONAL ANALYZER ---------
-class FixedInstitutionalAnalyzer:
+# --------- TRUE INSTITUTIONAL PRESSURE ANALYZER ---------
+class TrueInstitutionalAnalyzer:
     def __init__(self):
         self.analyzed_candles = set()
     
-    def analyze_big_candle_fixed(self, df, big_candle_idx):
-        """FIXED ANALYSIS - Correct pressure calculation"""
+    def analyze_big_candle_institutional(self, df, big_candle_idx):
+        """TRUE INSTITUTIONAL ANALYSIS - Real pressure detection"""
         try:
-            if len(df) <= big_candle_idx or big_candle_idx < 3:
+            if len(df) <= big_candle_idx or big_candle_idx < 5:  # Increased to 5 for better analysis
                 return None
             
-            # SAFELY get candle data using .iloc
+            # Get candle data with more context
             current_row = df.iloc[big_candle_idx]
             prev1_row = df.iloc[big_candle_idx-1]
             prev2_row = df.iloc[big_candle_idx-2]  
             prev3_row = df.iloc[big_candle_idx-3]
+            prev4_row = df.iloc[big_candle_idx-4]  # Additional context
+            prev5_row = df.iloc[big_candle_idx-5]  # Additional context
             
-            # SAFELY convert to scalar values
+            # Convert to scalar values
             current_open = safe_float(current_row['Open'])
             current_high = safe_float(current_row['High'])
             current_low = safe_float(current_row['Low'])
@@ -162,7 +163,7 @@ class FixedInstitutionalAnalyzer:
                 'prev_candles': []
             }
             
-            # Analyze previous 3 candles SAFELY
+            # Analyze previous 3 candles for context
             prev_rows = [prev3_row, prev2_row, prev1_row]
             for i, row in enumerate(prev_rows):
                 prev_open = safe_float(row['Open'])
@@ -190,25 +191,29 @@ class FixedInstitutionalAnalyzer:
                 }
                 analysis['prev_candles'].append(candle_data)
             
-            # Calculate FIXED institutional metrics
-            analysis.update(self.calculate_fixed_metrics(
+            # Calculate TRUE institutional pressure metrics
+            analysis.update(self.calculate_true_institutional_pressure(
                 current_open, current_high, current_low, current_close, current_volume,
-                prev_rows, direction
+                [prev5_row, prev4_row, prev3_row, prev2_row, prev1_row],  # More context
+                direction
             ))
             
             return analysis
             
         except Exception as e:
-            print(f"Fixed analysis error at index {big_candle_idx}: {e}")
+            print(f"Institutional analysis error at index {big_candle_idx}: {e}")
             return None
     
-    def calculate_fixed_metrics(self, curr_open, curr_high, curr_low, curr_close, curr_volume, prev_rows, direction):
-        """FIXED metric calculations with proper pressure logic"""
+    def calculate_true_institutional_pressure(self, curr_open, curr_high, curr_low, curr_close, curr_volume, prev_rows, direction):
+        """TRUE INSTITUTIONAL PRESSURE CALCULATIONS"""
         try:
-            # Extract previous candle data safely
-            prev_volumes = []
+            # Extract data from previous candles
+            prev_opens = []
+            prev_highs = []
+            prev_lows = []
             prev_closes = []
-            prev_ranges_pct = []
+            prev_volumes = []
+            prev_ranges = []
             
             for row in prev_rows:
                 prev_open = safe_float(row['Open'])
@@ -217,149 +222,202 @@ class FixedInstitutionalAnalyzer:
                 prev_close = safe_float(row['Close'])
                 prev_volume = safe_int(row['Volume'])
                 
-                prev_volumes.append(prev_volume)
+                prev_opens.append(prev_open)
+                prev_highs.append(prev_high)
+                prev_lows.append(prev_low)
                 prev_closes.append(prev_close)
-                
-                # Calculate range percentage
-                if prev_open > 0:
-                    range_pct = (prev_high - prev_low) / prev_open * 100
-                    prev_ranges_pct.append(range_pct)
+                prev_volumes.append(prev_volume)
+                prev_ranges.append(prev_high - prev_low)
             
-            # FIXED: Handle zero volume issue for Indian indices
-            # Generate synthetic volume based on price movement
+            # FIXED: Better volume simulation for institutional analysis
+            base_volume = 50000  # Higher base for institutional context
+            
             if curr_volume == 0:
-                base_volume = 10000  # Base volume for calculation
-                movement_intensity = abs(curr_close - curr_open) / curr_open * 100 if curr_open > 0 else 0
-                curr_volume = int(base_volume * (1 + movement_intensity * 10))
+                # Institutional volume simulation based on price action intensity
+                price_movement = abs(curr_close - curr_open)
+                range_size = curr_high - curr_low
+                volatility = range_size / curr_open if curr_open > 0 else 0
+                
+                # Institutional trades have higher volume during significant moves
+                movement_intensity = (price_movement / curr_open * 100) if curr_open > 0 else 0
+                volatility_factor = volatility * 100
+                
+                curr_volume = int(base_volume * (1 + movement_intensity * 8 + volatility_factor * 3))
             
-            # FIXED: Volume Analysis with synthetic volumes
-            if all(v == 0 for v in prev_volumes):
-                # All previous volumes are zero, use synthetic volumes
-                synthetic_volumes = []
-                for row in prev_rows:
-                    prev_open = safe_float(row['Open'])
-                    prev_close = safe_float(row['Close'])
-                    movement = abs(prev_close - prev_open) / prev_open * 100 if prev_open > 0 else 0
-                    synthetic_volumes.append(int(base_volume * (1 + movement * 10)))
-                avg_prev_volume = np.mean(synthetic_volumes)
-            else:
-                avg_prev_volume = np.mean([v if v > 0 else base_volume for v in prev_volumes])
+            # Calculate synthetic previous volumes
+            synthetic_prev_volumes = []
+            for i in range(len(prev_opens)):
+                if prev_volumes[i] == 0:
+                    prev_movement = abs(prev_closes[i] - prev_opens[i])
+                    prev_range = prev_ranges[i]
+                    prev_volatility = prev_range / prev_opens[i] if prev_opens[i] > 0 else 0
+                    
+                    prev_movement_intensity = (prev_movement / prev_opens[i] * 100) if prev_opens[i] > 0 else 0
+                    prev_volatility_factor = prev_volatility * 100
+                    
+                    synthetic_vol = int(base_volume * (1 + prev_movement_intensity * 8 + prev_volatility_factor * 3))
+                    synthetic_prev_volumes.append(synthetic_vol)
+                else:
+                    synthetic_prev_volumes.append(prev_volumes[i])
             
+            # TRUE INSTITUTIONAL PRESSURE METRICS
+            
+            # 1. Volume Dominance Analysis
+            avg_prev_volume = np.mean(synthetic_prev_volumes) if synthetic_prev_volumes else base_volume
             volume_surge_ratio = round(curr_volume / max(1, avg_prev_volume), 2)
-            volume_change_percent = round(((curr_volume - avg_prev_volume) / max(1, avg_prev_volume)) * 100, 2)
             
-            # Price Momentum
-            if len(prev_closes) >= 2:
-                price_momentum = (prev_closes[-1] - prev_closes[0]) / prev_closes[0] * 100
+            # Institutional volume thresholds (much higher than retail)
+            if volume_surge_ratio > 3.0:
+                volume_pressure = "VERY_HIGH"
+            elif volume_surge_ratio > 2.0:
+                volume_pressure = "HIGH"
+            elif volume_surge_ratio > 1.5:
+                volume_pressure = "MODERATE"
             else:
-                price_momentum = 0
+                volume_pressure = "LOW"
             
-            # Volatility Analysis
+            # 2. Price Efficiency Analysis (Institutional vs Retail)
+            current_efficiency = abs(curr_close - curr_open) / (curr_high - curr_low) if (curr_high - curr_low) > 0 else 0
+            prev_efficiencies = []
+            
+            for i in range(len(prev_opens)):
+                if prev_ranges[i] > 0:
+                    eff = abs(prev_closes[i] - prev_opens[i]) / prev_ranges[i]
+                    prev_efficiencies.append(eff)
+            
+            avg_prev_efficiency = np.mean(prev_efficiencies) if prev_efficiencies else current_efficiency
+            efficiency_ratio = round(current_efficiency / max(0.01, avg_prev_efficiency), 2)
+            
+            # High efficiency = institutional (clean moves), Low efficiency = retail (choppy)
+            if efficiency_ratio > 1.3:
+                efficiency_pressure = "INSTITUTIONAL"
+            elif efficiency_ratio > 0.8:
+                efficiency_pressure = "MIXED"
+            else:
+                efficiency_pressure = "RETAIL"
+            
+            # 3. Momentum Consistency Analysis
+            if len(prev_closes) >= 3:
+                short_momentum = (prev_closes[-1] - prev_closes[-3]) / prev_closes[-3] * 100
+                medium_momentum = (prev_closes[-1] - prev_closes[0]) / prev_closes[0] * 100
+                
+                momentum_alignment = abs(short_momentum - medium_momentum)
+                
+                if momentum_alignment < 0.05:  # Aligned momentum
+                    momentum_pressure = "STRONG"
+                elif momentum_alignment < 0.1:
+                    momentum_pressure = "MODERATE"
+                else:
+                    momentum_pressure = "WEAK"
+            else:
+                momentum_pressure = "NEUTRAL"
+            
+            # 4. Range Expansion Analysis (Institutional volatility)
             current_range_pct = (curr_high - curr_low) / curr_open * 100 if curr_open > 0 else 0
-            avg_prev_range = np.mean(prev_ranges_pct) if prev_ranges_pct else current_range_pct
-            volatility_expansion = round(((current_range_pct - avg_prev_range) / max(0.1, avg_prev_range)) * 100, 2)
+            avg_prev_range_pct = np.mean([(r/prev_opens[i]*100) for i, r in enumerate(prev_ranges) if prev_opens[i] > 0]) if prev_opens else current_range_pct
             
-            # FIXED: Proper Pressure Calculation
-            green_candles = 0
-            red_candles = 0
+            range_expansion = round(((current_range_pct - avg_prev_range_pct) / max(0.1, avg_prev_range_pct)) * 100, 2)
             
-            for row in prev_rows:
-                prev_open = safe_float(row['Open'])
-                prev_close = safe_float(row['Close'])
-                if prev_close > prev_open:
-                    green_candles += 1
-                elif prev_close < prev_open:
-                    red_candles += 1
+            if range_expansion > 80:
+                volatility_pressure = "HIGH_VOL_INSTITUTIONAL"
+            elif range_expansion > 50:
+                volatility_pressure = "MODERATE_VOL_INSTITUTIONAL"
+            elif range_expansion > 20:
+                volatility_pressure = "LIGHT_INSTITUTIONAL"
+            else:
+                volatility_pressure = "RETAIL_VOLATILITY"
             
-            # FIXED: Calculate pressures based on actual counts
-            total_candles = len(prev_rows)
-            buying_pressure_ratio = round(green_candles / total_candles, 2) if total_candles > 0 else 0
-            selling_pressure_ratio = round(red_candles / total_candles, 2) if total_candles > 0 else 0
-            
-            # FIXED: Institutional Score with volume workaround
+            # 5. TRUE INSTITUTIONAL PRESSURE SCORING
             score = 0
             
-            # Volume scoring (using synthetic volumes)
-            if volume_surge_ratio > 2.0: score += 35
-            elif volume_surge_ratio > 1.5: score += 25
-            elif volume_surge_ratio > 1.2: score += 15
+            # Volume scoring (institutional focus)
+            if volume_surge_ratio > 3.0: score += 40
+            elif volume_surge_ratio > 2.0: score += 30
+            elif volume_surge_ratio > 1.5: score += 20
             
-            # Volatility scoring
-            if volatility_expansion > 75: score += 30
-            elif volatility_expansion > 50: score += 20
-            elif volatility_expansion > 25: score += 10
+            # Efficiency scoring
+            if efficiency_pressure == "INSTITUTIONAL": score += 25
+            elif efficiency_pressure == "MIXED": score += 15
             
             # Momentum scoring
-            if abs(price_momentum) > 0.15: score += 20
-            elif abs(price_momentum) > 0.08: score += 15
-            elif abs(price_momentum) > 0.03: score += 10
+            if momentum_pressure == "STRONG": score += 20
+            elif momentum_pressure == "MODERATE": score += 10
             
-            # Candle size scoring
+            # Volatility scoring
+            if "INSTITUTIONAL" in volatility_pressure: score += 15
+            
+            # Candle size scoring (institutional moves are larger)
             candle_size = abs(curr_close - curr_open)
-            if candle_size > 40: score += 15
-            elif candle_size > 30: score += 10
-            elif candle_size > 20: score += 5
-            
-            # FIXED: Pressure scoring - only add if pressure aligns with direction
-            if direction == "GREEN" and buying_pressure_ratio >= 0.6:
-                score += 10
-            elif direction == "RED" and selling_pressure_ratio >= 0.6:
-                score += 10
+            if candle_size > 50: score += 20
+            elif candle_size > 30: score += 15
+            elif candle_size > 20: score += 10
             
             institutional_score = min(100, score)
             
+            # PRESSURE TYPE DETERMINATION
             if institutional_score >= 70:
+                pressure_type = "STRONG_INSTITUTIONAL"
                 confidence = "VERY_HIGH"
-                activity = "STRONG_INSTITUTIONAL"
             elif institutional_score >= 50:
-                confidence = "HIGH" 
-                activity = "MODERATE_INSTITUTIONAL"
+                pressure_type = "MODERATE_INSTITUTIONAL"
+                confidence = "HIGH"
             elif institutional_score >= 30:
+                pressure_type = "LIGHT_INSTITUTIONAL"
                 confidence = "MEDIUM"
-                activity = "LIGHT_INSTITUTIONAL"
             else:
+                pressure_type = "RETAIL_DOMINATED"
                 confidence = "LOW"
-                activity = "RETAIL_DOMINATED"
+            
+            # DIRECTIONAL PRESSURE
+            if direction == "GREEN":
+                directional_pressure = "INSTITUTIONAL_BUYING"
+                pressure_strength = volume_pressure
+            else:
+                directional_pressure = "INSTITUTIONAL_SELLING"
+                pressure_strength = volume_pressure
             
             return {
                 'volume_surge_ratio': volume_surge_ratio,
-                'volume_change_percent': volume_change_percent,
-                'prev_momentum_percent': round(price_momentum, 2),
-                'volatility_expansion': volatility_expansion,
-                'buying_pressure_ratio': buying_pressure_ratio,
-                'selling_pressure_ratio': selling_pressure_ratio,
+                'volume_pressure': volume_pressure,
+                'efficiency_ratio': efficiency_ratio,
+                'efficiency_pressure': efficiency_pressure,
+                'momentum_pressure': momentum_pressure,
+                'range_expansion': range_expansion,
+                'volatility_pressure': volatility_pressure,
                 'institutional_score': institutional_score,
-                'institutional_confidence': confidence,
-                'institutional_activity': activity,
-                'pressure_direction': "BUYING" if direction == "GREEN" else "SELLING"
+                'pressure_type': pressure_type,
+                'confidence': confidence,
+                'directional_pressure': directional_pressure,
+                'pressure_strength': pressure_strength,
+                'true_institutional_activity': pressure_type if institutional_score >= 30 else "RETAIL_DOMINATED"
             }
             
         except Exception as e:
-            print(f"Fixed metrics error: {e}")
+            print(f"True institutional pressure error: {e}")
             return {
                 'volume_surge_ratio': 0.0,
-                'volume_change_percent': 0.0,
-                'prev_momentum_percent': 0.0,
-                'volatility_expansion': 0.0,
-                'buying_pressure_ratio': 0.0,
-                'selling_pressure_ratio': 0.0,
+                'volume_pressure': "UNKNOWN",
+                'efficiency_ratio': 0.0,
+                'efficiency_pressure': "UNKNOWN",
+                'momentum_pressure': "UNKNOWN",
+                'range_expansion': 0.0,
+                'volatility_pressure': "UNKNOWN",
                 'institutional_score': 0,
-                'institutional_confidence': "LOW",
-                'institutional_activity': "RETAIL_DOMINATED",
-                'pressure_direction': "NEUTRAL"
+                'pressure_type': "RETAIL_DOMINATED",
+                'confidence': "LOW",
+                'directional_pressure': "NEUTRAL",
+                'pressure_strength': "LOW",
+                'true_institutional_activity': "RETAIL_DOMINATED"
             }
     
-    def find_all_big_candles_fixed(self, df, threshold=20):
-        """FIXED method to find all big candles with limit"""
+    def find_all_big_candles_institutional(self, df, threshold=20):
+        """Find all big candles with institutional analysis"""
         big_candles = []
         try:
-            if df is None or len(df) < 4:
+            if df is None or len(df) < 6:  # Increased minimum
                 return big_candles
                 
-            # Limit analysis to last 100 candles to prevent spam
-            start_idx = max(3, len(df) - 100)
-            
-            for i in range(start_idx, len(df)):
+            for i in range(5, len(df)):  # Start from 5 for better context
                 try:
                     # SAFE candle move calculation
                     row = df.iloc[i]
@@ -368,7 +426,7 @@ class FixedInstitutionalAnalyzer:
                     candle_move = abs(close_val - open_val)
                     
                     if candle_move >= threshold:
-                        analysis = self.analyze_big_candle_fixed(df, i)
+                        analysis = self.analyze_big_candle_institutional(df, i)
                         if analysis:
                             big_candles.append(analysis)
                 except Exception as e:
@@ -380,9 +438,9 @@ class FixedInstitutionalAnalyzer:
             print(f"Find big candles error: {e}")
             return []
 
-# --------- FIXED TELEGRAM MESSAGE FORMATTING ---------
-def format_fixed_analysis_message(index, timeframe, analysis, market_status):
-    """Format fixed analysis for Telegram"""
+# --------- INSTITUTIONAL TELEGRAM MESSAGE FORMATTING ---------
+def format_institutional_analysis_message(index, timeframe, analysis, market_status):
+    """Format true institutional analysis for Telegram"""
     
     # Format previous candles
     prev_candles_text = ""
@@ -392,19 +450,14 @@ def format_fixed_analysis_message(index, timeframe, analysis, market_status):
        O: {candle['open']} | H: {candle['high']} | L: {candle['low']} | C: {candle['close']}
        Range: {candle['range']} pts | Volume: {candle['volume']:,}"""
     
-    # Market status indicator
-    status_emoji = "🟢" if "LIVE" in market_status else "🟡"
-    
-    # Pressure display based on candle direction
-    if analysis['direction'] == "GREEN":
-        pressure_display = f"• Buying Pressure: {analysis['buying_pressure_ratio']}"
-        pressure_emoji = "🟢"
+    # Pressure emoji based on direction
+    if "BUYING" in analysis['directional_pressure']:
+        pressure_emoji = "🏛️🟢"
     else:
-        pressure_display = f"• Selling Pressure: {analysis['selling_pressure_ratio']}"
-        pressure_emoji = "🔴"
+        pressure_emoji = "🏛️🔴"
     
     msg = f"""
-{pressure_emoji} **BIG CANDLE DETECTED - {index} {timeframe}** {pressure_emoji}
+{pressure_emoji} **INSTITUTIONAL PRESSURE DETECTED - {index} {timeframe}** {pressure_emoji}
 
 📅 **DATE**: {analysis['date_str']}
 ⏰ **TIME**: {analysis['time_str']} IST
@@ -415,96 +468,87 @@ def format_fixed_analysis_message(index, timeframe, analysis, market_status):
 
 📋 **PREVIOUS 3 CANDLES ANALYSIS**:{prev_candles_text}
 
-📊 **INSTITUTIONAL METRICS**:
-• Volume Surge: {analysis['volume_surge_ratio']}x
-• Volume Change: {analysis['volume_change_percent']}%
-• Previous Momentum: {analysis['prev_momentum_percent']}%
-• Volatility Expansion: {analysis['volatility_expansion']}%
-{pressure_display}
+🏛️ **TRUE INSTITUTIONAL METRICS**:
+• Volume Surge: {analysis['volume_surge_ratio']}x ({analysis['volume_pressure']})
+• Price Efficiency: {analysis['efficiency_ratio']}x ({analysis['efficiency_pressure']})
+• Momentum Alignment: {analysis['momentum_pressure']}
+• Range Expansion: {analysis['range_expansion']}% ({analysis['volatility_pressure']})
 
-🏛️ **INSTITUTIONAL ASSESSMENT**:
+💼 **INSTITUTIONAL ASSESSMENT**:
 • Institutional Score: {analysis['institutional_score']}/100
-• Confidence: {analysis['institutional_confidence']}
-• Activity Type: {analysis['institutional_activity']}
+• Pressure Type: {analysis['pressure_type']}
+• Confidence: {analysis['confidence']}
+• Directional Pressure: {analysis['directional_pressure']}
+• Pressure Strength: {analysis['pressure_strength']}
 
 🎯 **TRADING IMPLICATION**:
-Consider {analysis['direction']} positions | {analysis['institutional_confidence']} confidence
+{analysis['directional_pressure']} | {analysis['confidence']} confidence
+True Activity: {analysis['true_institutional_activity']}
 📊 Market Status: {market_status}
 
 ─────────────────────────────
 """
     return msg
 
-# --------- FIXED MAIN ANALYSIS FUNCTION WITH AUTO-STOP ---------
-def analyze_fixed_historical_data():
-    """FIXED analysis with auto-stop and proper pressure calculation"""
+# --------- MAIN INSTITUTIONAL ANALYSIS FUNCTION ---------
+def analyze_true_institutional_data():
+    """TRUE institutional pressure analysis"""
     
-    analyzer = FixedInstitutionalAnalyzer()
+    analyzer = TrueInstitutionalAnalyzer()
     indices = ["NIFTY", "BANKNIFTY", "SENSEX"]
     timeframes = ["1m", "5m"]
     
     # Get smart analysis date
     analysis_date, market_status = get_analysis_date()
     
-    # Auto-stop timer
+    # Start timer
     start_time = time.time()
     
     startup_msg = f"""
-📊 **FIXED INSTITUTIONAL ANALYSIS STARTED**
+🏛️ **TRUE INSTITUTIONAL PRESSURE ANALYSIS STARTED**
 📅 Analysis Date: {analysis_date.strftime('%d %b %Y')}
 🎯 Target: {BIG_CANDLE_THRESHOLD}+ points moves
 📈 Analyzing: NIFTY, BANKNIFTY, SENSEX
 ⏰ Timeframes: 1min + 5min
 📊 Market Status: {market_status}
-⏱️ Auto-stop: {MAX_ANALYSIS_TIME} seconds
 
-**PROCESSING FIXED ANALYSIS...**
+**DETECTING REAL INSTITUTIONAL ACTIVITY...**
 """
     send_telegram(startup_msg)
-    print(f"Starting fixed analysis for {analysis_date}...")
+    print(f"Starting true institutional analysis for {analysis_date}...")
     
     total_big_moves = 0
+    total_analyzed = 0
     
     for index in indices:
-        # Check if time exceeded
-        if time.time() - start_time > MAX_ANALYSIS_TIME:
-            print("⏰ Time limit reached, stopping analysis...")
-            break
-            
         index_moves = 0
         
         for timeframe in timeframes:
-            # Check if time exceeded
-            if time.time() - start_time > MAX_ANALYSIS_TIME:
-                break
-                
             try:
-                print(f"🔍 Analyzing {index} {timeframe} for {analysis_date}...")
+                print(f"🏛️ Analyzing {index} {timeframe} for institutional pressure...")
                 
                 # Fetch historical data
                 df = fetch_historical_data_safe(index, analysis_date, timeframe)
+                total_analyzed += 1
                 
                 if df is not None and len(df) > 10:
-                    # Find big candles with fixed analysis
-                    big_candles = analyzer.find_all_big_candles_fixed(df, BIG_CANDLE_THRESHOLD)
+                    # Find big candles with institutional analysis
+                    big_candles = analyzer.find_all_big_candles_institutional(df, BIG_CANDLE_THRESHOLD)
                     
                     if big_candles:
-                        # Send each analysis (limit to prevent spam)
-                        for i, analysis in enumerate(big_candles[:10]):  # Max 10 per timeframe
-                            if time.time() - start_time > MAX_ANALYSIS_TIME:
-                                break
-                                
-                            message = format_fixed_analysis_message(index, timeframe, analysis, market_status)
+                        # Send each analysis
+                        for analysis in big_candles:
+                            message = format_institutional_analysis_message(index, timeframe, analysis, market_status)
                             if send_telegram(message):
-                                print(f"✅ Sent {index} {timeframe} at {analysis['time_str']} IST")
+                                print(f"✅ Sent {index} {timeframe} institutional pressure at {analysis['time_str']}")
                                 total_big_moves += 1
                                 index_moves += 1
-                            time.sleep(2)  # Reduced delay
+                            time.sleep(1)
                     
                     # Send timeframe summary
                     summary_msg = f"""
-📋 **{index} {timeframe} SUMMARY**
-{'✅' if big_candles else '❌'} Found {len(big_candles)} big moves (≥{BIG_CANDLE_THRESHOLD} points)
+📋 **{index} {timeframe} INSTITUTIONAL SUMMARY**
+{'🏛️' if big_candles else '❌'} Found {len(big_candles)} institutional moves (≥{BIG_CANDLE_THRESHOLD} points)
 📅 Date: {analysis_date.strftime('%d %b %Y')}
 """
                     send_telegram(summary_msg)
@@ -526,25 +570,39 @@ def analyze_fixed_historical_data():
 """
                 send_telegram(error_msg)
                 continue
+        
+        # Index completion message
+        if index_moves > 0:
+            index_msg = f"""
+🏁 **{index} INSTITUTIONAL ANALYSIS COMPLETED**
+📈 Found {index_moves} institutional pressure moves
+📅 Date: {analysis_date.strftime('%d %b %Y')}
+"""
+            send_telegram(index_msg)
+    
+    # Calculate analysis time
+    analysis_time = round(time.time() - start_time)
     
     # Final completion message
     completion_msg = f"""
-🎉 **FIXED ANALYSIS COMPLETED** 🎉
+🎉 **TRUE INSTITUTIONAL ANALYSIS FINISHED** 🎉
 
 📅 Analysis Date: {analysis_date.strftime('%d %b %Y')}
 🕒 Finished: {datetime.now(IST).strftime('%H:%M:%S IST')}
-📊 Total Big Moves: {total_big_moves}
-📈 Market Status: {market_status}
-⏱️ Analysis Time: {round(time.time() - start_time)} seconds
-✅ Auto-stopped after {MAX_ANALYSIS_TIME} seconds
+📊 Total Institutional Moves Found: {total_big_moves}
+📈 Total Analysis: {total_analyzed} datasets
+⏱️ Analysis Time: {analysis_time} seconds
+📊 Market Status: {market_status}
 
-**ANALYSIS COMPLETE - READY FOR NEXT RUN**
+✅ **ALL INSTITUTIONAL ANALYSIS COMPLETED - PROGRAM STOPPED**
+
+**Ready for detecting real institutional activity**
 """
     send_telegram(completion_msg)
-    print(f"✅ Fixed analysis completed! Found {total_big_moves} big moves for {analysis_date}")
+    print(f"✅ True institutional analysis finished! Found {total_big_moves} moves in {analysis_time} seconds")
 
-# --------- RUN FIXED ANALYSIS ---------
+# --------- RUN TRUE INSTITUTIONAL ANALYSIS ---------
 if __name__ == "__main__":
-    print("🚀 Starting Fixed Institutional Analysis...")
-    analyze_fixed_historical_data()
-    print("🛑 Analysis stopped automatically")
+    print("🏛️ Starting True Institutional Pressure Analysis...")
+    analyze_true_institutional_data()
+    print("🛑 Program stopped automatically after completing all institutional analysis")
