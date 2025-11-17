@@ -1,4 +1,4 @@
-# ULTIMATE NUMERICAL INSTITUTIONAL ANALYZER - 17 NOV 2025
+# ULTIMATE NUMERICAL INSTITUTIONAL ANALYZER - FIXED WITH TIME ANALYSIS
 import os
 import time
 import requests
@@ -20,9 +20,10 @@ def send_telegram(msg):
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         payload = {"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"}
-        requests.post(url, data=payload, timeout=10)
-        return True
-    except:
+        response = requests.post(url, data=payload, timeout=10)
+        return response.status_code == 200
+    except Exception as e:
+        print(f"Telegram error: {e}")
         return False
 
 # --------- DATA FETCHING ---------
@@ -33,10 +34,19 @@ def fetch_todays_data(index, interval="1m"):
             "BANKNIFTY": "^NSEBANK", 
             "SENSEX": "^BSESN"
         }
-        today = datetime.now().strftime("%Y-%m-%d")
-        df = yf.download(symbol_map[index], start=today, interval=interval, progress=False)
-        return df if not df.empty else None
-    except Exception:
+        # Get today's date properly
+        today = datetime.now().date()
+        df = yf.download(symbol_map[index], start=today, interval=interval, progress=False, timeout=30)
+        
+        if df.empty:
+            print(f"No data for {index} {interval}")
+            return None
+            
+        print(f"Fetched {len(df)} candles for {index} {interval}")
+        return df
+        
+    except Exception as e:
+        print(f"Data fetch error for {index} {interval}: {e}")
         return None
 
 # --------- NUMERICAL INSTITUTIONAL ANALYSIS ---------
@@ -47,72 +57,94 @@ class NumericalInstitutionalAnalyzer:
     def analyze_big_candle_with_context(self, df, big_candle_idx):
         """Analyze BIG candle with 3 previous candles - ONLY NUMERICAL VALUES"""
         try:
-            if len(df) < big_candle_idx + 1 or big_candle_idx < 3:
+            if len(df) <= big_candle_idx or big_candle_idx < 3:
                 return None
             
             # Get candles data
             big_candle = df.iloc[big_candle_idx]
-            prev3 = df.iloc[big_candle_idx-3:big_candle_idx]
-            prev2 = df.iloc[big_candle_idx-2]
-            prev1 = df.iloc[big_candle_idx-1]
+            prev3_start = max(0, big_candle_idx-3)
+            prev3 = df.iloc[prev3_start:big_candle_idx]
+            
+            if len(prev3) < 1:
+                return None
             
             # Calculate EXACT NUMERICAL VALUES
             analysis = {}
             
             # 1. PRICE MOVEMENT NUMBERS
             big_candle_move = abs(big_candle['Close'] - big_candle['Open'])
-            analysis['big_candle_points'] = round(big_candle_move, 2)
+            analysis['big_candle_points'] = round(float(big_candle_move), 2)
             analysis['big_candle_direction'] = "UP" if big_candle['Close'] > big_candle['Open'] else "DOWN"
-            analysis['big_candle_range'] = round(big_candle['High'] - big_candle['Low'], 2)
+            analysis['big_candle_range'] = round(float(big_candle['High'] - big_candle['Low']), 2)
             
             # Previous 3 candles cumulative move
-            prev3_move = abs(prev3['Close'].iloc[-1] - prev3['Open'].iloc[0])
+            prev3_move = abs(float(prev3['Close'].iloc[-1]) - float(prev3['Open'].iloc[0]))
             analysis['prev3_cumulative_points'] = round(prev3_move, 2)
             
             # Price acceleration ratio
             analysis['price_acceleration_ratio'] = round(big_candle_move / max(0.1, prev3_move), 2)
             
             # 2. VOLUME ANALYSIS NUMBERS
-            big_volume = big_candle['Volume']
-            prev3_avg_volume = prev3['Volume'].mean()
+            big_volume = float(big_candle['Volume'])
+            prev3_avg_volume = float(prev3['Volume'].mean())
             analysis['big_candle_volume'] = int(big_volume)
             analysis['volume_surge_ratio'] = round(big_volume / max(1, prev3_avg_volume), 2)
             analysis['volume_change_percent'] = round(((big_volume - prev3_avg_volume) / max(1, prev3_avg_volume)) * 100, 2)
             
             # 3. VOLATILITY NUMBERS
-            big_candle_range_pct = (big_candle['High'] - big_candle['Low']) / big_candle['Open'] * 100
-            prev3_avg_range_pct = ((prev3['High'] - prev3['Low']) / prev3['Open'] * 100).mean()
+            big_candle_range_pct = (float(big_candle['High']) - float(big_candle['Low'])) / float(big_candle['Open']) * 100
+            prev3_ranges = [(float(prev3['High'].iloc[i]) - float(prev3['Low'].iloc[i])) / float(prev3['Open'].iloc[i]) * 100 for i in range(len(prev3))]
+            prev3_avg_range_pct = np.mean(prev3_ranges) if prev3_ranges else 0
+            
             analysis['range_expansion_percent'] = round(((big_candle_range_pct - prev3_avg_range_pct) / max(0.1, prev3_avg_range_pct)) * 100, 2)
             
             # ATR calculations
-            atr_5 = ta.volatility.AverageTrueRange(df['High'], df['Low'], df['Close'], 5).average_true_range().iloc[big_candle_idx]
-            analysis['atr_value'] = round(atr_5, 2)
-            analysis['move_vs_atr_ratio'] = round(big_candle_move / max(0.1, atr_5), 2)
+            try:
+                atr_calc = ta.volatility.AverageTrueRange(df['High'], df['Low'], df['Close'], window=5)
+                atr_5 = atr_calc.average_true_range()
+                if len(atr_5) > big_candle_idx:
+                    analysis['atr_value'] = round(float(atr_5.iloc[big_candle_idx]), 2)
+                else:
+                    analysis['atr_value'] = round(big_candle_range_pct, 2)
+            except:
+                analysis['atr_value'] = round(big_candle_range_pct, 2)
+                
+            analysis['move_vs_atr_ratio'] = round(big_candle_move / max(0.1, analysis['atr_value']), 2)
             
             # 4. ORDER FLOW ESTIMATION NUMBERS
             # Price-Volume correlation in previous 3 candles
-            prev3_price_changes = (prev3['Close'] - prev3['Open']).values
-            prev3_volume_changes = (prev3['Volume'] / prev3['Volume'].mean()).values
-            price_volume_corr = np.corrcoef(prev3_price_changes, prev3_volume_changes)[0,1] if len(prev3_price_changes) > 1 else 0
-            analysis['price_volume_correlation'] = round(price_volume_corr, 3)
+            prev3_price_changes = [float(prev3['Close'].iloc[i]) - float(prev3['Open'].iloc[i]) for i in range(len(prev3))]
+            prev3_volume_changes = [float(prev3['Volume'].iloc[i]) / max(1, prev3_avg_volume) for i in range(len(prev3))]
+            
+            if len(prev3_price_changes) > 1:
+                price_volume_corr = np.corrcoef(prev3_price_changes, prev3_volume_changes)[0,1]
+                analysis['price_volume_correlation'] = round(price_volume_corr, 3)
+            else:
+                analysis['price_volume_correlation'] = 0.0
             
             # Bid-Ask imbalance estimation
-            body_size = abs(big_candle['Close'] - big_candle['Open'])
-            total_range = big_candle['High'] - big_candle['Low']
+            body_size = abs(float(big_candle['Close']) - float(big_candle['Open']))
+            total_range = float(big_candle['High']) - float(big_candle['Low'])
             if total_range > 0:
                 wick_ratio = (total_range - body_size) / total_range
-                # High wick ratio suggests rejection (selling pressure)
                 analysis['wick_pressure_ratio'] = round(wick_ratio, 3)
             else:
                 analysis['wick_pressure_ratio'] = 0.0
             
             # 5. MOMENTUM NUMBERS
             # RSI before big move
-            rsi_before = ta.momentum.RSIIndicator(prev3['Close'], 3).rsi().iloc[-1]
-            analysis['rsi_before_move'] = round(rsi_before, 2)
+            try:
+                rsi_calc = ta.momentum.RSIIndicator(prev3['Close'], window=3)
+                rsi_before = rsi_calc.rsi()
+                if len(rsi_before) > 0:
+                    analysis['rsi_before_move'] = round(float(rsi_before.iloc[-1]), 2)
+                else:
+                    analysis['rsi_before_move'] = 50.0
+            except:
+                analysis['rsi_before_move'] = 50.0
             
             # Momentum acceleration
-            prev3_momentum = (prev3['Close'].iloc[-1] - prev3['Close'].iloc[0]) / prev3['Close'].iloc[0] * 100
+            prev3_momentum = (float(prev3['Close'].iloc[-1]) - float(prev3['Close'].iloc[0])) / float(prev3['Close'].iloc[0]) * 100
             analysis['prev3_momentum_percent'] = round(prev3_momentum, 2)
             
             # 6. INSTITUTIONAL PRESSURE NUMBERS
@@ -138,27 +170,53 @@ class NumericalInstitutionalAnalyzer:
             
             # 7. TIMING AND STRENGTH NUMBERS
             analysis['timestamp'] = df.index[big_candle_idx]
-            analysis['strength_index'] = min(10, round((analysis['price_acceleration_ratio'] + analysis['volume_surge_ratio'] + analysis['move_vs_atr_ratio']) / 3, 2))
+            analysis['candle_time'] = df.index[big_candle_idx].strftime('%H:%M:%S')
+            analysis['strength_index'] = min(10.0, round((analysis['price_acceleration_ratio'] + analysis['volume_surge_ratio'] + analysis['move_vs_atr_ratio']) / 3.0, 2))
+            
+            # 8. TIME-BASED ANALYSIS
+            hour = df.index[big_candle_idx].hour
+            minute = df.index[big_candle_idx].minute
+            
+            if 9 <= hour < 10:
+                analysis['market_phase'] = "OPENING"
+            elif 10 <= hour < 12:
+                analysis['market_phase'] = "MID-MORNING" 
+            elif 12 <= hour < 14:
+                analysis['market_phase'] = "MIDDAY"
+            elif 14 <= hour < 15:
+                analysis['market_phase'] = "LATE SESSION"
+            else:
+                analysis['market_phase'] = "CLOSING"
             
             return analysis
             
         except Exception as e:
-            print(f"Analysis error: {e}")
+            print(f"Analysis error at index {big_candle_idx}: {e}")
             return None
     
     def find_all_big_candles(self, df, threshold=20):
-        """Find ALL big candles >= threshold points"""
+        """Find ALL big candles >= threshold points - FIXED VERSION"""
         big_candles = []
         try:
+            if df is None or len(df) < 4:
+                return big_candles
+                
             for i in range(3, len(df)):
-                candle_move = abs(df['Close'].iloc[i] - df['Open'].iloc[i])
-                if candle_move >= threshold:
-                    analysis = self.analyze_big_candle_with_context(df, i)
-                    if analysis:
-                        big_candles.append(analysis)
+                try:
+                    candle_move = abs(float(df['Close'].iloc[i]) - float(df['Open'].iloc[i]))
+                    if candle_move >= threshold:
+                        analysis = self.analyze_big_candle_with_context(df, i)
+                        if analysis:
+                            big_candles.append(analysis)
+                except Exception as e:
+                    print(f"Error processing candle {i}: {e}")
+                    continue
+                    
+            return big_candles
+            
         except Exception as e:
-            print(f"Error finding big candles: {e}")
-        return big_candles
+            print(f"Error in find_all_big_candles: {e}")
+            return []
 
 # --------- TELEGRAM FORMATTING ---------
 def format_numerical_analysis(index, timeframe, analysis):
@@ -166,7 +224,7 @@ def format_numerical_analysis(index, timeframe, analysis):
     
     msg = f"""
 🔢 <b>NUMERICAL INSTITUTIONAL ANALYSIS - {index} {timeframe}</b>
-🕒 <b>Time</b>: {analysis['timestamp'].strftime('%H:%M:%S')}
+🕒 <b>Time</b>: {analysis['candle_time']} | {analysis['market_phase']}
 
 📊 <b>BIG CANDLE NUMBERS</b>:
 • Direction: {analysis['big_candle_direction']}
@@ -216,10 +274,10 @@ def analyze_todays_big_moves():
     indices = ["NIFTY", "BANKNIFTY", "SENSEX"]
     timeframes = ["1m", "5m"]
     
-    startup_msg = """
+    startup_msg = f"""
 🔢 <b>NUMERICAL INSTITUTIONAL ANALYZER STARTED</b>
-📅 <b>Date</b>: 17 NOV 2025
-🎯 <b>Target</b>: 20+ points moves
+📅 <b>Date</b>: {datetime.now().strftime('%d %b %Y')}
+🎯 <b>Target</b>: {BIG_CANDLE_THRESHOLD}+ points moves
 📊 <b>Indices</b>: NIFTY, BANKNIFTY, SENSEX
 ⏰ <b>Timeframes</b>: 1min + 5min
 
@@ -228,6 +286,8 @@ def analyze_todays_big_moves():
     send_telegram(startup_msg)
     print("Starting numerical analysis...")
     
+    total_big_moves = 0
+    
     for index in indices:
         for timeframe in timeframes:
             try:
@@ -235,27 +295,38 @@ def analyze_todays_big_moves():
                 df = fetch_todays_data(index, timeframe)
                 
                 if df is not None and len(df) > 10:
+                    print(f"Found {len(df)} candles for analysis")
                     big_candles = analyzer.find_all_big_candles(df, BIG_CANDLE_THRESHOLD)
                     
                     if big_candles:
                         for i, analysis in enumerate(big_candles):
                             message = format_numerical_analysis(index, timeframe, analysis)
-                            send_telegram(message)
+                            if send_telegram(message):
+                                print(f"Sent analysis for {index} {timeframe} at {analysis['candle_time']}")
+                                total_big_moves += 1
                             time.sleep(2)  # Avoid rate limiting
                         
                         summary_msg = f"""
 ✅ <b>{index} {timeframe} SUMMARY</b>
-📈 Found {len(big_candles)} big moves (≥20 points)
+📈 Found {len(big_candles)} big moves (≥{BIG_CANDLE_THRESHOLD} points)
 🕒 Analysis completed: {datetime.now().strftime('%H:%M:%S')}
 """
                         send_telegram(summary_msg)
                     else:
                         no_moves_msg = f"""
 ❌ <b>{index} {timeframe}</b>
-📊 No big moves ≥20 points detected
+📊 No big moves ≥{BIG_CANDLE_THRESHOLD} points detected
 🕒 Checked {len(df)} candles
+⏰ Last candle: {df.index[-1].strftime('%H:%M:%S') if len(df) > 0 else 'N/A'}
 """
                         send_telegram(no_moves_msg)
+                else:
+                    error_msg = f"""
+⚠️ <b>{index} {timeframe}</b>
+📊 Insufficient data for analysis
+🕒 Data points: {len(df) if df is not None else 0}
+"""
+                    send_telegram(error_msg)
                 
                 time.sleep(1)
                 
@@ -265,17 +336,20 @@ def analyze_todays_big_moves():
 🔧 {str(e)}
 """
                 send_telegram(error_msg)
+                print(f"Error analyzing {index} {timeframe}: {e}")
                 continue
     
-    completion_msg = """
+    completion_msg = f"""
 ✅ <b>NUMERICAL ANALYSIS COMPLETED</b>
-📅 Date: 17 NOV 2025
-🕒 Finished: """ + datetime.now().strftime('%H:%M:%S') + """
-📊 All indices analyzed for 20+ points moves
+📅 Date: {datetime.now().strftime('%d %b %Y')}
+🕒 Finished: {datetime.now().strftime('%H:%M:%S')}
+📊 Total Big Moves Found: {total_big_moves}
+🎯 Threshold: {BIG_CANDLE_THRESHOLD}+ points
 """
     send_telegram(completion_msg)
+    print(f"Analysis completed. Total big moves found: {total_big_moves}")
 
 # --------- RUN ANALYSIS ---------
 if __name__ == "__main__":
-    print("Starting Numerical Institutional Analyzer for 17 NOV 2025...")
+    print("Starting Numerical Institutional Analyzer...")
     analyze_todays_big_moves()
