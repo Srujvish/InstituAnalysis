@@ -1,94 +1,226 @@
-# TRUE INSTITUTIONAL PRESSURE ANALYZER - ENHANCED VERSION complete inst with volume surge and thing 
+#INDEXBASED + EOD NOT COMMING - FIXED VERSION
+# MODIFIED WITH INSTITUTIONAL PRESSURE STRATEGY
+
 import os
 import time
 import requests
 import pandas as pd
 import yfinance as yf
+import ta
 import warnings
+import pyotp
+import math
+from datetime import datetime, time as dtime, timedelta
+from SmartApi.smartConnect import SmartConnect
+import threading
 import numpy as np
-from datetime import datetime, timedelta
 import pytz
 
 warnings.filterwarnings("ignore")
 
-# --------- CONFIGURATION ---------
-BIG_CANDLE_THRESHOLD = 20
+# ---------------- CONFIG ----------------
+# INSTITUTIONAL PRESSURE THRESHOLDS
+INSTITUTIONAL_THRESHOLDS = {
+    "NIFTY": 25,      # 20-25 points optimal
+    "BANKNIFTY": 55,  # 50-60 points optimal  
+    "SENSEX": 35      # 30-40 points optimal
+}
+
+MIN_INSTITUTIONAL_SCORE = 60
+MIN_VOLUME_SURGE = 1.8
+MIN_EFFICIENCY_RATIO = 1.5
+
+OPENING_PLAY_ENABLED = True
+OPENING_START = dtime(9,15)
+OPENING_END = dtime(9,45)
+
+EXPIRY_ACTIONABLE = True
+EXPIRY_INFO_ONLY = False
+
+# --------- EXPIRIES FOR KEPT INDICES ---------
+EXPIRIES = {
+    "NIFTY": "25 NOV 2025",
+    "BANKNIFTY": "25 NOV 2025", 
+    "SENSEX": "20 NOV 2025"
+}
+
+# --------- STRATEGY TRACKING ---------
+STRATEGY_NAMES = {
+    "institutional_pressure": "INSTITUTIONAL PRESSURE",
+    "gamma_squeeze": "GAMMA SQUEEZE"
+}
+
+# --------- ENHANCED TRACKING FOR REPORTS ---------
+all_generated_signals = []
+strategy_performance = {}
+signal_counter = 0
+daily_signals = []
+
+# --------- SIGNAL DEDUPLICATION AND COOLDOWN TRACKING ---------
+active_strikes = {}
+last_signal_time = {}
+signal_cooldown = 300  # 5 minutes in seconds
+
+def initialize_strategy_tracking():
+    """Initialize strategy performance tracking"""
+    global strategy_performance
+    strategy_performance = {
+        "INSTITUTIONAL PRESSURE": {"total": 0, "success_2_targets": 0, "success_3_4_targets": 0, "total_pnl": 0},
+        "GAMMA SQUEEZE": {"total": 0, "success_2_targets": 0, "success_3_4_targets": 0, "total_pnl": 0}
+    }
+
+# Initialize tracking
+initialize_strategy_tracking()
+
+# --------- ANGEL ONE LOGIN ---------
+API_KEY = os.getenv("API_KEY")
+CLIENT_CODE = os.getenv("CLIENT_CODE")
+PASSWORD = os.getenv("PASSWORD")
+TOTP_SECRET = os.getenv("TOTP_SECRET")
+TOTP = pyotp.TOTP(TOTP_SECRET).now()
+
+client = SmartConnect(api_key=API_KEY)
+session = client.generateSession(CLIENT_CODE, PASSWORD, TOTP)
+feedToken = client.getfeedToken()
+
+# --------- TELEGRAM ---------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-# Timezone setup
-IST = pytz.timezone('Asia/Kolkata')
+STARTED_SENT = False
+STOP_SENT = False
+MARKET_CLOSED_SENT = False
+EOD_REPORT_SENT = False
 
-def send_telegram(msg):
+def send_telegram(msg, reply_to=None):
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         payload = {"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"}
-        response = requests.post(url, data=payload, timeout=10)
-        return True
-    except Exception as e:
-        print(f"Telegram error: {e}")
+        if reply_to:
+            payload["reply_to_message_id"] = reply_to
+        r = requests.post(url, data=payload, timeout=5).json()
+        return r.get("result", {}).get("message_id")
+    except:
+        return None
+
+# --------- MARKET HOURS ---------
+def is_market_open():
+    utc_now = datetime.utcnow()
+    ist_now = utc_now + timedelta(hours=5, minutes=30)
+    current_time_ist = ist_now.time()
+    return dtime(9,15) <= current_time_ist <= dtime(15,30)
+
+def should_stop_trading():
+    utc_now = datetime.utcnow()
+    ist_now = utc_now + timedelta(hours=5, minutes=30)
+    current_time_ist = ist_now.time()
+    return current_time_ist >= dtime(15,30)
+
+# --------- STRIKE ROUNDING FOR KEPT INDICES ---------
+def round_strike(index, price):
+    try:
+        if price is None:
+            return None
+        if isinstance(price, float) and math.isnan(price):
+            return None
+        price = float(price)
+        
+        if index == "NIFTY": 
+            return int(round(price / 50.0) * 50)
+        elif index == "BANKNIFTY": 
+            return int(round(price / 100.0) * 100)
+        elif index == "SENSEX": 
+            return int(round(price / 100.0) * 100)
+        else: 
+            return int(round(price / 50.0) * 50)
+    except Exception:
+        return None
+
+# --------- ENSURE SERIES ---------
+def ensure_series(data):
+    return data.iloc[:,0] if isinstance(data, pd.DataFrame) else data.squeeze()
+
+# --------- FETCH INDEX DATA FOR KEPT INDICES ---------
+def fetch_index_data(index, interval="1m", period="1d"):  # Changed to 1m for institutional analysis
+    symbol_map = {
+        "NIFTY": "^NSEI", 
+        "BANKNIFTY": "^NSEBANK", 
+        "SENSEX": "^BSESN"
+    }
+    df = yf.download(symbol_map[index], period=period, interval=interval, auto_adjust=True, progress=False)
+    return None if df.empty else df
+
+# --------- LOAD TOKEN MAP ---------
+def load_token_map():
+    try:
+        url="https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
+        df=pd.DataFrame(requests.get(url,timeout=10).json())
+        df.columns=[c.lower() for c in df.columns]
+        df=df[df['exch_seg'].str.upper().isin(["NFO", "BFO"])]
+        df['symbol']=df['symbol'].str.upper()
+        return df.set_index('symbol')['token'].to_dict()
+    except:
+        return {}
+
+token_map=load_token_map()
+
+# --------- SAFE LTP FETCH ---------
+def fetch_option_price(symbol, retries=3, delay=3):
+    token=token_map.get(symbol.upper())
+    if not token:
+        return None
+    for _ in range(retries):
+        try:
+            exchange = "BFO" if "SENSEX" in symbol.upper() else "NFO"
+            data=client.ltpData(exchange, symbol, token)
+            return float(data['data']['ltp'])
+        except:
+            time.sleep(delay)
+    return None
+
+# --------- STRICT EXPIRY VALIDATION ---------
+def validate_option_symbol(index, symbol, strike, opttype):
+    """STRICT validation to ensure ONLY specified expiry symbols are used"""
+    try:
+        expected_expiry = EXPIRIES.get(index)
+        if not expected_expiry:
+            return False
+            
+        expected_dt = datetime.strptime(expected_expiry, "%d %b %Y")
+        symbol_upper = symbol.upper()
+        
+        if index == "SENSEX":
+            year_short = expected_dt.strftime("%y")
+            month_code = expected_dt.strftime("%b").upper()
+            expected_pattern = f"SENSEX{year_short}{month_code}"
+            return expected_pattern in symbol_upper
+        else:
+            expected_pattern = expected_dt.strftime("%d%b%y").upper()
+            return expected_pattern in symbol_upper
+            
+    except Exception:
         return False
 
-# --------- SMART DATE SELECTION ---------
-def get_analysis_date():
-    """Get the correct date for analysis - today if market open, else last trading day"""
-    now_ist = datetime.now(IST)
-    
-    # Check if market is open today (Monday to Friday, 9:15 AM - 3:30 PM IST)
-    if now_ist.weekday() < 5:  # Monday to Friday
-        market_open = now_ist.replace(hour=9, minute=15, second=0, microsecond=0)
-        market_close = now_ist.replace(hour=15, minute=30, second=0, microsecond=0)
-        
-        # If current time is after market open, analyze today
-        if now_ist >= market_open:
-            analysis_date = now_ist.date()
-            market_status = "LIVE_MARKET" if now_ist <= market_close else "TODAYS_CLOSED_MARKET"
-        else:
-            # Before market open, analyze previous trading day
-            analysis_date = (now_ist - timedelta(days=1)).date()
-            market_status = "PREVIOUS_DAY_ANALYSIS"
-    else:
-        # Weekend - analyze last Friday
-        days_back = 1 if now_ist.weekday() == 5 else 2  # Saturday or Sunday
-        analysis_date = (now_ist - timedelta(days=days_back)).date()
-        market_status = "WEEKEND_ANALYSIS"
-    
-    return analysis_date, market_status
-
-# --------- SAFE DATA FETCHING ---------
-def fetch_historical_data_safe(index, analysis_date, interval="1m"):
+# --------- STRICT OPTION SYMBOL GENERATION ---------
+def get_option_symbol(index, expiry_str, strike, opttype):
+    """STRICT: Generate symbols ONLY for specified expiries"""
     try:
-        symbol_map = {
-            "NIFTY": "^NSEI", 
-            "BANKNIFTY": "^NSEBANK", 
-            "SENSEX": "^BSESN"
-        }
+        dt = datetime.strptime(expiry_str, "%d %b %Y")
         
-        # Convert to string for yfinance
-        date_str = analysis_date.strftime("%Y-%m-%d")
-        
-        # For 1-minute data, we need to handle market hours
-        if interval == "1m":
-            # Fetch data for the specific date
-            df = yf.download(
-                symbol_map[index], 
-                start=date_str, 
-                end=(analysis_date + timedelta(days=1)).strftime("%Y-%m-%d"),
-                interval=interval, 
-                progress=False
-            )
+        if index == "SENSEX":
+            year_short = dt.strftime("%y")
+            month_code = dt.strftime("%b").upper()
+            day = dt.strftime("%d")
+            symbol = f"SENSEX{year_short}{month_code}{strike}{opttype}"
         else:
-            df = yf.download(symbol_map[index], start=date_str, interval=interval, progress=False)
+            symbol = f"{index}{dt.strftime('%d%b%y').upper()}{strike}{opttype}"
         
-        if df.empty:
-            print(f"No data for {index} {interval} on {date_str}")
+        if validate_option_symbol(index, symbol, strike, opttype):
+            return symbol
+        else:
             return None
             
-        print(f"✅ Fetched {len(df)} candles for {index} {interval} on {date_str}")
-        return df
-        
-    except Exception as e:
-        print(f"Data error {index} {interval}: {e}")
+    except Exception:
         return None
 
 # --------- SAFE DATA CONVERSION ---------
@@ -116,132 +248,35 @@ def safe_int(value):
     except:
         return 0
 
-# --------- TRUE INSTITUTIONAL PRESSURE ANALYZER ---------
-class TrueInstitutionalAnalyzer:
+# --------- INSTITUTIONAL PRESSURE ANALYZER ---------
+class InstitutionalPressureAnalyzer:
     def __init__(self):
         self.analyzed_candles = set()
     
-    def analyze_big_candle_institutional(self, df, big_candle_idx):
-        """TRUE INSTITUTIONAL ANALYSIS - Real pressure detection"""
+    def calculate_institutional_pressure(self, current_candle, prev_candles, direction):
+        """Calculate institutional pressure metrics"""
         try:
-            if len(df) <= big_candle_idx or big_candle_idx < 5:  # Increased to 5 for better analysis
-                return None
+            curr_open = safe_float(current_candle['Open'])
+            curr_high = safe_float(current_candle['High'])
+            curr_low = safe_float(current_candle['Low'])
+            curr_close = safe_float(current_candle['Close'])
+            curr_volume = safe_int(current_candle['Volume'])
             
-            # Get candle data with more context
-            current_row = df.iloc[big_candle_idx]
-            prev1_row = df.iloc[big_candle_idx-1]
-            prev2_row = df.iloc[big_candle_idx-2]  
-            prev3_row = df.iloc[big_candle_idx-3]
-            prev4_row = df.iloc[big_candle_idx-4]  # Additional context
-            prev5_row = df.iloc[big_candle_idx-5]  # Additional context
+            # Extract previous candle data
+            prev_opens = [safe_float(c['Open']) for c in prev_candles]
+            prev_highs = [safe_float(c['High']) for c in prev_candles]
+            prev_lows = [safe_float(c['Low']) for c in prev_candles]
+            prev_closes = [safe_float(c['Close']) for c in prev_candles]
+            prev_volumes = [safe_int(c['Volume']) for c in prev_candles]
             
-            # Convert to scalar values
-            current_open = safe_float(current_row['Open'])
-            current_high = safe_float(current_row['High'])
-            current_low = safe_float(current_row['Low'])
-            current_close = safe_float(current_row['Close'])
-            current_volume = safe_int(current_row['Volume'])
-            
-            # Calculate big candle move
-            big_candle_move = abs(current_close - current_open)
-            direction = "GREEN" if current_close > current_open else "RED"
-            
-            # Convert timestamp to IST
-            candle_timestamp = df.index[big_candle_idx]
-            if candle_timestamp.tzinfo is None:
-                candle_timestamp = pytz.UTC.localize(candle_timestamp)
-            ist_time = candle_timestamp.astimezone(IST)
-            
-            analysis = {
-                'timestamp': ist_time,
-                'time_str': ist_time.strftime('%H:%M:%S'),
-                'date_str': ist_time.strftime('%d %b %Y'),
-                'direction': direction,
-                'points_moved': round(big_candle_move, 2),
-                'candle_range': round(current_high - current_low, 2),
-                'volume': current_volume,
-                'prev_candles': []
-            }
-            
-            # Analyze previous 3 candles for context
-            prev_rows = [prev3_row, prev2_row, prev1_row]
-            for i, row in enumerate(prev_rows):
-                prev_open = safe_float(row['Open'])
-                prev_high = safe_float(row['High'])
-                prev_low = safe_float(row['Low'])
-                prev_close = safe_float(row['Close'])
-                prev_volume = safe_int(row['Volume'])
-                
-                # Convert previous candle time to IST
-                prev_timestamp = df.index[big_candle_idx-3+i]
-                if prev_timestamp.tzinfo is None:
-                    prev_timestamp = pytz.UTC.localize(prev_timestamp)
-                prev_ist_time = prev_timestamp.astimezone(IST)
-                
-                candle_data = {
-                    'time': prev_ist_time.strftime('%H:%M:%S'),
-                    'open': round(prev_open, 2),
-                    'high': round(prev_high, 2), 
-                    'low': round(prev_low, 2),
-                    'close': round(prev_close, 2),
-                    'points_move': round(abs(prev_close - prev_open), 2),
-                    'direction': "GREEN" if prev_close > prev_open else "RED",
-                    'volume': prev_volume,
-                    'range': round(prev_high - prev_low, 2)
-                }
-                analysis['prev_candles'].append(candle_data)
-            
-            # Calculate TRUE institutional pressure metrics
-            analysis.update(self.calculate_true_institutional_pressure(
-                current_open, current_high, current_low, current_close, current_volume,
-                [prev5_row, prev4_row, prev3_row, prev2_row, prev1_row],  # More context
-                direction
-            ))
-            
-            return analysis
-            
-        except Exception as e:
-            print(f"Institutional analysis error at index {big_candle_idx}: {e}")
-            return None
-    
-    def calculate_true_institutional_pressure(self, curr_open, curr_high, curr_low, curr_close, curr_volume, prev_rows, direction):
-        """TRUE INSTITUTIONAL PRESSURE CALCULATIONS"""
-        try:
-            # Extract data from previous candles
-            prev_opens = []
-            prev_highs = []
-            prev_lows = []
-            prev_closes = []
-            prev_volumes = []
-            prev_ranges = []
-            
-            for row in prev_rows:
-                prev_open = safe_float(row['Open'])
-                prev_high = safe_float(row['High'])
-                prev_low = safe_float(row['Low'])
-                prev_close = safe_float(row['Close'])
-                prev_volume = safe_int(row['Volume'])
-                
-                prev_opens.append(prev_open)
-                prev_highs.append(prev_high)
-                prev_lows.append(prev_low)
-                prev_closes.append(prev_close)
-                prev_volumes.append(prev_volume)
-                prev_ranges.append(prev_high - prev_low)
-            
-            # FIXED: Better volume simulation for institutional analysis
-            base_volume = 50000  # Higher base for institutional context
-            
+            # Volume analysis
+            base_volume = 50000
             if curr_volume == 0:
-                # Institutional volume simulation based on price action intensity
                 price_movement = abs(curr_close - curr_open)
                 range_size = curr_high - curr_low
                 volatility = range_size / curr_open if curr_open > 0 else 0
-                
-                # Institutional trades have higher volume during significant moves
                 movement_intensity = (price_movement / curr_open * 100) if curr_open > 0 else 0
                 volatility_factor = volatility * 100
-                
                 curr_volume = int(base_volume * (1 + movement_intensity * 8 + volatility_factor * 3))
             
             # Calculate synthetic previous volumes
@@ -249,61 +284,37 @@ class TrueInstitutionalAnalyzer:
             for i in range(len(prev_opens)):
                 if prev_volumes[i] == 0:
                     prev_movement = abs(prev_closes[i] - prev_opens[i])
-                    prev_range = prev_ranges[i]
+                    prev_range = prev_highs[i] - prev_lows[i]
                     prev_volatility = prev_range / prev_opens[i] if prev_opens[i] > 0 else 0
-                    
                     prev_movement_intensity = (prev_movement / prev_opens[i] * 100) if prev_opens[i] > 0 else 0
                     prev_volatility_factor = prev_volatility * 100
-                    
                     synthetic_vol = int(base_volume * (1 + prev_movement_intensity * 8 + prev_volatility_factor * 3))
                     synthetic_prev_volumes.append(synthetic_vol)
                 else:
                     synthetic_prev_volumes.append(prev_volumes[i])
             
-            # TRUE INSTITUTIONAL PRESSURE METRICS
-            
-            # 1. Volume Dominance Analysis
+            # Volume surge ratio
             avg_prev_volume = np.mean(synthetic_prev_volumes) if synthetic_prev_volumes else base_volume
             volume_surge_ratio = round(curr_volume / max(1, avg_prev_volume), 2)
             
-            # Institutional volume thresholds (much higher than retail)
-            if volume_surge_ratio > 3.0:
-                volume_pressure = "VERY_HIGH"
-            elif volume_surge_ratio > 2.0:
-                volume_pressure = "HIGH"
-            elif volume_surge_ratio > 1.5:
-                volume_pressure = "MODERATE"
-            else:
-                volume_pressure = "LOW"
-            
-            # 2. Price Efficiency Analysis (Institutional vs Retail)
+            # Price efficiency
             current_efficiency = abs(curr_close - curr_open) / (curr_high - curr_low) if (curr_high - curr_low) > 0 else 0
             prev_efficiencies = []
-            
             for i in range(len(prev_opens)):
-                if prev_ranges[i] > 0:
-                    eff = abs(prev_closes[i] - prev_opens[i]) / prev_ranges[i]
+                if (prev_highs[i] - prev_lows[i]) > 0:
+                    eff = abs(prev_closes[i] - prev_opens[i]) / (prev_highs[i] - prev_lows[i])
                     prev_efficiencies.append(eff)
             
             avg_prev_efficiency = np.mean(prev_efficiencies) if prev_efficiencies else current_efficiency
             efficiency_ratio = round(current_efficiency / max(0.01, avg_prev_efficiency), 2)
             
-            # High efficiency = institutional (clean moves), Low efficiency = retail (choppy)
-            if efficiency_ratio > 1.3:
-                efficiency_pressure = "INSTITUTIONAL"
-            elif efficiency_ratio > 0.8:
-                efficiency_pressure = "MIXED"
-            else:
-                efficiency_pressure = "RETAIL"
-            
-            # 3. Momentum Consistency Analysis
+            # Momentum consistency
             if len(prev_closes) >= 3:
                 short_momentum = (prev_closes[-1] - prev_closes[-3]) / prev_closes[-3] * 100
                 medium_momentum = (prev_closes[-1] - prev_closes[0]) / prev_closes[0] * 100
-                
                 momentum_alignment = abs(short_momentum - medium_momentum)
                 
-                if momentum_alignment < 0.05:  # Aligned momentum
+                if momentum_alignment < 0.05:
                     momentum_pressure = "STRONG"
                 elif momentum_alignment < 0.1:
                     momentum_pressure = "MODERATE"
@@ -312,41 +323,32 @@ class TrueInstitutionalAnalyzer:
             else:
                 momentum_pressure = "NEUTRAL"
             
-            # 4. Range Expansion Analysis (Institutional volatility)
+            # Range expansion
             current_range_pct = (curr_high - curr_low) / curr_open * 100 if curr_open > 0 else 0
-            avg_prev_range_pct = np.mean([(r/prev_opens[i]*100) for i, r in enumerate(prev_ranges) if prev_opens[i] > 0]) if prev_opens else current_range_pct
-            
+            prev_ranges_pct = [(prev_highs[i] - prev_lows[i]) / prev_opens[i] * 100 for i in range(len(prev_opens)) if prev_opens[i] > 0]
+            avg_prev_range_pct = np.mean(prev_ranges_pct) if prev_ranges_pct else current_range_pct
             range_expansion = round(((current_range_pct - avg_prev_range_pct) / max(0.1, avg_prev_range_pct)) * 100, 2)
             
-            if range_expansion > 80:
-                volatility_pressure = "HIGH_VOL_INSTITUTIONAL"
-            elif range_expansion > 50:
-                volatility_pressure = "MODERATE_VOL_INSTITUTIONAL"
-            elif range_expansion > 20:
-                volatility_pressure = "LIGHT_INSTITUTIONAL"
-            else:
-                volatility_pressure = "RETAIL_VOLATILITY"
-            
-            # 5. TRUE INSTITUTIONAL PRESSURE SCORING
+            # Institutional scoring
             score = 0
             
-            # Volume scoring (institutional focus)
+            # Volume scoring
             if volume_surge_ratio > 3.0: score += 40
             elif volume_surge_ratio > 2.0: score += 30
             elif volume_surge_ratio > 1.5: score += 20
             
             # Efficiency scoring
-            if efficiency_pressure == "INSTITUTIONAL": score += 25
-            elif efficiency_pressure == "MIXED": score += 15
+            if efficiency_ratio > 1.3: score += 25
+            elif efficiency_ratio > 0.8: score += 15
             
             # Momentum scoring
             if momentum_pressure == "STRONG": score += 20
             elif momentum_pressure == "MODERATE": score += 10
             
             # Volatility scoring
-            if "INSTITUTIONAL" in volatility_pressure: score += 15
+            if range_expansion > 50: score += 15
             
-            # Candle size scoring (institutional moves are larger)
+            # Candle size scoring
             candle_size = abs(curr_close - curr_open)
             if candle_size > 50: score += 20
             elif candle_size > 30: score += 15
@@ -354,7 +356,7 @@ class TrueInstitutionalAnalyzer:
             
             institutional_score = min(100, score)
             
-            # PRESSURE TYPE DETERMINATION
+            # Pressure type determination
             if institutional_score >= 70:
                 pressure_type = "STRONG_INSTITUTIONAL"
                 confidence = "VERY_HIGH"
@@ -368,241 +370,451 @@ class TrueInstitutionalAnalyzer:
                 pressure_type = "RETAIL_DOMINATED"
                 confidence = "LOW"
             
-            # DIRECTIONAL PRESSURE
+            # Directional pressure
             if direction == "GREEN":
                 directional_pressure = "INSTITUTIONAL_BUYING"
-                pressure_strength = volume_pressure
             else:
                 directional_pressure = "INSTITUTIONAL_SELLING"
-                pressure_strength = volume_pressure
             
             return {
                 'volume_surge_ratio': volume_surge_ratio,
-                'volume_pressure': volume_pressure,
                 'efficiency_ratio': efficiency_ratio,
-                'efficiency_pressure': efficiency_pressure,
-                'momentum_pressure': momentum_pressure,
-                'range_expansion': range_expansion,
-                'volatility_pressure': volatility_pressure,
                 'institutional_score': institutional_score,
                 'pressure_type': pressure_type,
                 'confidence': confidence,
                 'directional_pressure': directional_pressure,
-                'pressure_strength': pressure_strength,
                 'true_institutional_activity': pressure_type if institutional_score >= 30 else "RETAIL_DOMINATED"
             }
             
         except Exception as e:
-            print(f"True institutional pressure error: {e}")
             return {
                 'volume_surge_ratio': 0.0,
-                'volume_pressure': "UNKNOWN",
                 'efficiency_ratio': 0.0,
-                'efficiency_pressure': "UNKNOWN",
-                'momentum_pressure': "UNKNOWN",
-                'range_expansion': 0.0,
-                'volatility_pressure': "UNKNOWN",
                 'institutional_score': 0,
                 'pressure_type': "RETAIL_DOMINATED",
                 'confidence': "LOW",
                 'directional_pressure': "NEUTRAL",
-                'pressure_strength': "LOW",
                 'true_institutional_activity': "RETAIL_DOMINATED"
             }
     
-    def find_all_big_candles_institutional(self, df, threshold=20):
-        """Find all big candles with institutional analysis"""
-        big_candles = []
+    def find_institutional_pressure(self, df, index):
+        """Find institutional pressure signals in recent data"""
         try:
-            if df is None or len(df) < 6:  # Increased minimum
-                return big_candles
+            if df is None or len(df) < 10:
+                return None
                 
-            for i in range(5, len(df)):  # Start from 5 for better context
+            # Get the threshold for this index
+            threshold = INSTITUTIONAL_THRESHOLDS.get(index, 20)
+            
+            # Analyze last 5 candles
+            for i in range(5, min(10, len(df))):
                 try:
-                    # SAFE candle move calculation
-                    row = df.iloc[i]
-                    open_val = safe_float(row['Open'])
-                    close_val = safe_float(row['Close'])
-                    candle_move = abs(close_val - open_val)
+                    current_row = df.iloc[i]
+                    prev1_row = df.iloc[i-1]
+                    prev2_row = df.iloc[i-2]
+                    prev3_row = df.iloc[i-3]
+                    prev4_row = df.iloc[i-4]
+                    prev5_row = df.iloc[i-5]
                     
+                    current_open = safe_float(current_row['Open'])
+                    current_close = safe_float(current_row['Close'])
+                    candle_move = abs(current_close - current_open)
+                    
+                    # Check if this is a big candle
                     if candle_move >= threshold:
-                        analysis = self.analyze_big_candle_institutional(df, i)
-                        if analysis:
-                            big_candles.append(analysis)
-                except Exception as e:
-                    continue  # Skip problematic candles
+                        direction = "GREEN" if current_close > current_open else "RED"
                         
-            return big_candles
+                        # Calculate institutional pressure
+                        prev_candles = [prev5_row, prev4_row, prev3_row, prev2_row, prev1_row]
+                        pressure_metrics = self.calculate_institutional_pressure(
+                            current_row, prev_candles, direction
+                        )
+                        
+                        # Apply filters
+                        if (pressure_metrics['institutional_score'] >= MIN_INSTITUTIONAL_SCORE and
+                            pressure_metrics['volume_surge_ratio'] >= MIN_VOLUME_SURGE and
+                            pressure_metrics['efficiency_ratio'] >= MIN_EFFICIENCY_RATIO):
+                            
+                            # Convert timestamp to IST
+                            candle_timestamp = df.index[i]
+                            if candle_timestamp.tzinfo is None:
+                                candle_timestamp = pytz.UTC.localize(candle_timestamp)
+                            ist_time = candle_timestamp.astimezone(pytz.timezone('Asia/Kolkata'))
+                            
+                            return {
+                                'timestamp': ist_time,
+                                'time_str': ist_time.strftime('%H:%M:%S'),
+                                'direction': direction,
+                                'points_moved': round(candle_move, 2),
+                                'pressure_metrics': pressure_metrics
+                            }
+                            
+                except Exception:
+                    continue
+                    
+            return None
             
         except Exception as e:
-            print(f"Find big candles error: {e}")
-            return []
+            return None
 
-# --------- INSTITUTIONAL TELEGRAM MESSAGE FORMATTING ---------
-def format_institutional_analysis_message(index, timeframe, analysis, market_status):
-    """Format true institutional analysis for Telegram"""
+# --------- INSTITUTIONAL PRESSURE STRATEGY ---------
+def analyze_index_signal(index):
+    """INSTITUTIONAL PRESSURE STRATEGY - MAIN ANALYSIS"""
+    try:
+        # Use 1-minute data for institutional pressure detection
+        df = fetch_index_data(index, "1m", "1d")
+        if df is None or len(df) < 10:
+            return None
+
+        # Check cooldown
+        current_time = time.time()
+        if index in last_signal_time:
+            time_since_last = current_time - last_signal_time[index]
+            if time_since_last < signal_cooldown:
+                return None
+
+        # Analyze for institutional pressure
+        analyzer = InstitutionalPressureAnalyzer()
+        pressure_signal = analyzer.find_institutional_pressure(df, index)
+        
+        if pressure_signal:
+            side = "CE" if pressure_signal['direction'] == "GREEN" else "PE"
+            fakeout = False
+            
+            # Format institutional analysis message
+            analysis_msg = format_institutional_analysis(index, pressure_signal)
+            send_telegram(analysis_msg)
+            
+            return side, df, fakeout, "institutional_pressure"
+            
+        return None
+        
+    except Exception as e:
+        return None
+
+def format_institutional_analysis(index, pressure_signal):
+    """Format institutional pressure analysis for Telegram"""
+    metrics = pressure_signal['pressure_metrics']
     
-    # Format previous candles
-    prev_candles_text = ""
-    for i, candle in enumerate(analysis['prev_candles'], 1):
-        prev_candles_text += f"""
-    {i}. {candle['time']} - {candle['direction']} {candle['points_move']} points
-       O: {candle['open']} | H: {candle['high']} | L: {candle['low']} | C: {candle['close']}
-       Range: {candle['range']} pts | Volume: {candle['volume']:,}"""
-    
-    # Pressure emoji based on direction
-    if "BUYING" in analysis['directional_pressure']:
+    if pressure_signal['direction'] == "GREEN":
         pressure_emoji = "🏛️🟢"
     else:
         pressure_emoji = "🏛️🔴"
     
     msg = f"""
-{pressure_emoji} **INSTITUTIONAL PRESSURE DETECTED - {index} {timeframe}** {pressure_emoji}
+{pressure_emoji} **INSTITUTIONAL PRESSURE DETECTED - {index} 1m** {pressure_emoji}
 
-📅 **DATE**: {analysis['date_str']}
-⏰ **TIME**: {analysis['time_str']} IST
-🎯 **DIRECTION**: {analysis['direction']}
-📈 **POINTS MOVED**: {analysis['points_moved']} points
-📊 **CANDLE RANGE**: {analysis['candle_range']} points  
-📦 **VOLUME**: {analysis['volume']:,}
-
-📋 **PREVIOUS 3 CANDLES ANALYSIS**:{prev_candles_text}
+📅 **DATE**: {datetime.now().strftime('%d %b %Y')}
+⏰ **TIME**: {pressure_signal['time_str']} IST
+🎯 **DIRECTION**: {pressure_signal['direction']}
+📈 **POINTS MOVED**: {pressure_signal['points_moved']} points
 
 🏛️ **TRUE INSTITUTIONAL METRICS**:
-• Volume Surge: {analysis['volume_surge_ratio']}x ({analysis['volume_pressure']})
-• Price Efficiency: {analysis['efficiency_ratio']}x ({analysis['efficiency_pressure']})
-• Momentum Alignment: {analysis['momentum_pressure']}
-• Range Expansion: {analysis['range_expansion']}% ({analysis['volatility_pressure']})
+• Volume Surge: {metrics['volume_surge_ratio']}x
+• Price Efficiency: {metrics['efficiency_ratio']}x
+• Institutional Score: {metrics['institutional_score']}/100
 
 💼 **INSTITUTIONAL ASSESSMENT**:
-• Institutional Score: {analysis['institutional_score']}/100
-• Pressure Type: {analysis['pressure_type']}
-• Confidence: {analysis['confidence']}
-• Directional Pressure: {analysis['directional_pressure']}
-• Pressure Strength: {analysis['pressure_strength']}
+• Pressure Type: {metrics['pressure_type']}
+• Confidence: {metrics['confidence']}
+• Directional Pressure: {metrics['directional_pressure']}
 
 🎯 **TRADING IMPLICATION**:
-{analysis['directional_pressure']} | {analysis['confidence']} confidence
-True Activity: {analysis['true_institutional_activity']}
-📊 Market Status: {market_status}
+{metrics['directional_pressure']} | {metrics['confidence']} confidence
+True Activity: {metrics['true_institutional_activity']}
 
 ─────────────────────────────
 """
     return msg
 
-# --------- MAIN INSTITUTIONAL ANALYSIS FUNCTION ---------
-def analyze_true_institutional_data():
-    """TRUE institutional pressure analysis"""
+# --------- STRICT SIGNAL DEDUPLICATION AND COOLDOWN CHECK ---------
+def can_send_signal(index, strike, option_type):
+    """STRICT: Check if we can send signal based on deduplication and cooldown rules"""
+    global active_strikes, last_signal_time
     
-    analyzer = TrueInstitutionalAnalyzer()
-    indices = ["NIFTY", "BANKNIFTY", "SENSEX"]
-    timeframes = ["1m", "5m"]
+    current_time = time.time()
+    strike_key = f"{index}_{strike}_{option_type}"
     
-    # Get smart analysis date
-    analysis_date, market_status = get_analysis_date()
-    
-    # Start timer
-    start_time = time.time()
-    
-    startup_msg = f"""
-🏛️ **TRUE INSTITUTIONAL PRESSURE ANALYSIS STARTED**
-📅 Analysis Date: {analysis_date.strftime('%d %b %Y')}
-🎯 Target: {BIG_CANDLE_THRESHOLD}+ points moves
-📈 Analyzing: NIFTY, BANKNIFTY, SENSEX
-⏰ Timeframes: 1min + 5min
-📊 Market Status: {market_status}
-
-**DETECTING REAL INSTITUTIONAL ACTIVITY...**
-"""
-    send_telegram(startup_msg)
-    print(f"Starting true institutional analysis for {analysis_date}...")
-    
-    total_big_moves = 0
-    total_analyzed = 0
-    
-    for index in indices:
-        index_moves = 0
+    # Check if same strike is already active
+    if strike_key in active_strikes:
+        return False
         
-        for timeframe in timeframes:
-            try:
-                print(f"🏛️ Analyzing {index} {timeframe} for institutional pressure...")
-                
-                # Fetch historical data
-                df = fetch_historical_data_safe(index, analysis_date, timeframe)
-                total_analyzed += 1
-                
-                if df is not None and len(df) > 10:
-                    # Find big candles with institutional analysis
-                    big_candles = analyzer.find_all_big_candles_institutional(df, BIG_CANDLE_THRESHOLD)
-                    
-                    if big_candles:
-                        # Send each analysis
-                        for analysis in big_candles:
-                            message = format_institutional_analysis_message(index, timeframe, analysis, market_status)
-                            if send_telegram(message):
-                                print(f"✅ Sent {index} {timeframe} institutional pressure at {analysis['time_str']}")
-                                total_big_moves += 1
-                                index_moves += 1
-                            time.sleep(1)
-                    
-                    # Send timeframe summary
-                    summary_msg = f"""
-📋 **{index} {timeframe} INSTITUTIONAL SUMMARY**
-{'🏛️' if big_candles else '❌'} Found {len(big_candles)} institutional moves (≥{BIG_CANDLE_THRESHOLD} points)
-📅 Date: {analysis_date.strftime('%d %b %Y')}
-"""
-                    send_telegram(summary_msg)
-                    
-                else:
-                    no_data_msg = f"""
-⚠️ **{index} {timeframe}**
-📊 No data available for {analysis_date.strftime('%d %b %Y')}
-"""
-                    send_telegram(no_data_msg)
-                
-                time.sleep(1)
-                
-            except Exception as e:
-                error_msg = f"""
-❌ **ERROR: {index} {timeframe}**
-🔧 {str(e)}
-📅 Date: {analysis_date.strftime('%d %b %Y')}
-"""
-                send_telegram(error_msg)
-                continue
+    # Check cooldown for this index
+    if index in last_signal_time:
+        time_since_last = current_time - last_signal_time[index]
+        if time_since_last < signal_cooldown:
+            return False
+    
+    return True
+
+def update_signal_tracking(index, strike, option_type, signal_id):
+    """Update tracking for sent signals"""
+    global active_strikes, last_signal_time
+    
+    strike_key = f"{index}_{strike}_{option_type}"
+    active_strikes[strike_key] = {
+        'signal_id': signal_id,
+        'timestamp': time.time()
+    }
+    
+    last_signal_time[index] = time.time()
+
+def clear_completed_signal(signal_id):
+    """Clear signal from active tracking when completed"""
+    global active_strikes
+    active_strikes = {k: v for k, v in active_strikes.items() if v['signal_id'] != signal_id}
+
+# --------- UPDATED SIGNAL SENDING ---------
+def send_signal(index, side, df, fakeout, strategy_key):
+    global signal_counter, all_generated_signals
+    
+    # Get current price for strike calculation
+    current_price = float(ensure_series(df["Close"]).iloc[-1])
+    strike = round_strike(index, current_price)
+    
+    if strike is None:
+        return
         
-        # Index completion message
-        if index_moves > 0:
-            index_msg = f"""
-🏁 **{index} INSTITUTIONAL ANALYSIS COMPLETED**
-📈 Found {index_moves} institutional pressure moves
-📅 Date: {analysis_date.strftime('%d %b %Y')}
-"""
-            send_telegram(index_msg)
+    # Check deduplication and cooldown
+    if not can_send_signal(index, strike, side):
+        return
+        
+    # Generate option symbol
+    symbol = get_option_symbol(index, EXPIRIES[index], strike, side)
+    if symbol is None:
+        return
     
-    # Calculate analysis time
-    analysis_time = round(time.time() - start_time)
+    # Fetch option price
+    option_price = fetch_option_price(symbol)
+    if not option_price: 
+        return
     
-    # Final completion message
-    completion_msg = f"""
-🎉 **TRUE INSTITUTIONAL ANALYSIS FINISHED** 🎉
+    entry = round(option_price)
+    
+    # Calculate institutional targets (bigger moves)
+    if side == "CE":
+        base_move = max(current_price * 0.008, 40)  # Minimum 40 points
+        targets = [
+            round(entry + base_move * 1.0),
+            round(entry + base_move * 1.8),
+            round(entry + base_move * 2.8),
+            round(entry + base_move * 4.0)
+        ]
+        sl = round(entry - base_move * 0.8)
+    else:  # PE
+        base_move = max(current_price * 0.008, 40)  # Minimum 40 points
+        targets = [
+            round(entry + base_move * 1.0),
+            round(entry + base_move * 1.8),
+            round(entry + base_move * 2.8),
+            round(entry + base_move * 4.0)
+        ]
+        sl = round(entry - base_move * 0.8)
+    
+    targets_str = "//".join(str(t) for t in targets) + "++"
+    
+    strategy_name = STRATEGY_NAMES.get(strategy_key, strategy_key.upper())
+    
+    signal_id = f"SIG{signal_counter:04d}"
+    signal_counter += 1
+    
+    signal_data = {
+        "signal_id": signal_id,
+        "timestamp": (datetime.utcnow()+timedelta(hours=5,minutes=30)).strftime("%H:%M:%S"),
+        "index": index,
+        "strike": strike,
+        "option_type": side,
+        "strategy": strategy_name,
+        "entry_price": entry,
+        "targets": targets,
+        "sl": sl,
+        "fakeout": fakeout,
+        "index_price": current_price
+    }
+    
+    # Update signal tracking
+    update_signal_tracking(index, strike, side, signal_id)
+    all_generated_signals.append(signal_data.copy())
+    
+    msg = (f"🟢 {index} {strike} {side}\n"
+           f"SYMBOL: {symbol}\n"
+           f"ABOVE {entry}\n"
+           f"TARGETS: {targets_str}\n"
+           f"SL: {sl}\n"
+           f"FAKEOUT: {'YES' if fakeout else 'NO'}\n"
+           f"STRATEGY: {strategy_name}\n"
+           f"SIGNAL ID: {signal_id}")
+         
+    thread_id = send_telegram(msg)
+    
+    # Start monitoring thread
+    start_monitoring(symbol, entry, targets, sl, fakeout, thread_id, strategy_name, signal_data)
 
-📅 Analysis Date: {analysis_date.strftime('%d %b %Y')}
-🕒 Finished: {datetime.now(IST).strftime('%H:%M:%S IST')}
-📊 Total Institutional Moves Found: {total_big_moves}
-📈 Total Analysis: {total_analyzed} datasets
-⏱️ Analysis Time: {analysis_time} seconds
-📊 Market Status: {market_status}
+def start_monitoring(symbol, entry, targets, sl, fakeout, thread_id, strategy_name, signal_data):
+    """Start monitoring thread for the signal"""
+    def monitor_thread():
+        max_price = entry
+        targets_hit = 0
+        
+        # Monitor for 5 minutes
+        end_time = time.time() + 300  # 5 minutes
+        
+        while time.time() < end_time:
+            current_price = fetch_option_price(symbol)
+            if current_price:
+                if current_price > max_price:
+                    max_price = current_price
+                
+                # Check targets
+                for i, target in enumerate(targets):
+                    if current_price >= target and i >= targets_hit:
+                        targets_hit = i + 1
+                        send_telegram(f"🎯 {symbol}: Target {targets_hit} hit at ₹{target}", reply_to=thread_id)
+                
+                # Check SL
+                if current_price <= sl:
+                    send_telegram(f"🛑 {symbol}: SL hit at ₹{sl}", reply_to=thread_id)
+                    break
+            
+            time.sleep(5)  # Check every 5 seconds
+        
+        # Clear signal after monitoring
+        clear_completed_signal(signal_data['signal_id'])
+    
+    thread = threading.Thread(target=monitor_thread)
+    thread.daemon = True
+    thread.start()
 
-✅ **ALL INSTITUTIONAL ANALYSIS COMPLETED - PROGRAM STOPPED**
+# --------- TRADE THREAD ---------
+def trade_thread(index):
+    """Generate signals for each index"""
+    result = analyze_index_signal(index)
+    
+    if not result:
+        return
+        
+    side, df, fakeout, strategy_key = result
+    send_signal(index, side, df, fakeout, strategy_key)
 
-**Ready for detecting real institutional activity**
-"""
-    send_telegram(completion_msg)
-    print(f"✅ True institutional analysis finished! Found {total_big_moves} moves in {analysis_time} seconds")
+# --------- MAIN LOOP ---------
+def run_algo_parallel():
+    if not is_market_open(): 
+        return
+        
+    if should_stop_trading():
+        global STOP_SENT, EOD_REPORT_SENT
+        if not STOP_SENT:
+            send_telegram("🛑 Market closed at 3:30 PM IST - Algorithm stopped")
+            STOP_SENT = True
+            
+        if not EOD_REPORT_SENT:
+            time.sleep(15)
+            send_individual_signal_reports()
+            EOD_REPORT_SENT = True
+            
+        return
+        
+    threads = []
+    kept_indices = ["NIFTY", "BANKNIFTY", "SENSEX"]
+    
+    for index in kept_indices:
+        t = threading.Thread(target=trade_thread, args=(index,))
+        t.start()
+        threads.append(t)
+    
+    for t in threads: 
+        t.join()
 
-# --------- RUN TRUE INSTITUTIONAL ANALYSIS ---------
-if __name__ == "__main__":
-    print("🏛️ Starting True Institutional Pressure Analysis...")
-    analyze_true_institutional_data()
-    print("🛑 Program stopped automatically after completing all institutional analysis")
+# --------- EOD REPORT (KEEP EXISTING) ---------
+def send_individual_signal_reports():
+    """Send EOD reports"""
+    global daily_signals, all_generated_signals
+    
+    all_signals = daily_signals + all_generated_signals
+    seen_ids = set()
+    unique_signals = []
+    for signal in all_signals:
+        sid = signal.get('signal_id')
+        if not sid:
+            continue
+        if sid not in seen_ids:
+            seen_ids.add(sid)
+            unique_signals.append(signal)
+    
+    if not unique_signals:
+        send_telegram("📊 END OF DAY REPORT\nNo signals generated today.")
+        return
+    
+    send_telegram(f"🕒 END OF DAY SIGNAL REPORT - { (datetime.utcnow()+timedelta(hours=5,minutes=30)).strftime('%d-%b-%Y') }\n"
+                  f"📈 Total Signals: {len(unique_signals)}\n"
+                  f"─────────────────────────────")
+    
+    for i, signal in enumerate(unique_signals, 1):
+        msg = (f"📊 SIGNAL #{i}\n"
+               f"Index: {signal.get('index','?')}\n"
+               f"Strike: {signal.get('strike','?')} {signal.get('option_type','?')}\n"
+               f"Strategy: {signal.get('strategy','?')}\n"
+               f"Signal ID: {signal.get('signal_id','?')}\n"
+               f"─────────────────────────────")
+        send_telegram(msg)
+        time.sleep(1)
+
+# --------- MAIN EXECUTION ---------
+STARTED_SENT = False
+STOP_SENT = False
+MARKET_CLOSED_SENT = False
+EOD_REPORT_SENT = False
+
+while True:
+    try:
+        utc_now = datetime.utcnow()
+        ist_now = utc_now + timedelta(hours=5, minutes=30)
+        current_time_ist = ist_now.time()
+        
+        market_open = is_market_open()
+        
+        if not market_open:
+            if not MARKET_CLOSED_SENT:
+                send_telegram("🔴 Market is currently closed. Algorithm waiting for 9:15 AM...")
+                MARKET_CLOSED_SENT = True
+                STARTED_SENT = False
+                STOP_SENT = False
+                EOD_REPORT_SENT = False
+            
+            if current_time_ist >= dtime(15,30) and current_time_ist <= dtime(16,0) and not EOD_REPORT_SENT:
+                send_individual_signal_reports()
+                EOD_REPORT_SENT = True
+            
+            time.sleep(30)
+            continue
+        
+        if not STARTED_SENT:
+            send_telegram("🚀 INSTITUTIONAL PRESSURE ALGO STARTED\n"
+                         "✅ NIFTY, BANKNIFTY, SENSEX\n"
+                         "✅ 5-Minute Monitoring\n"
+                         "✅ Institutional Pressure Detection")
+            STARTED_SENT = True
+            STOP_SENT = False
+            MARKET_CLOSED_SENT = False
+        
+        if should_stop_trading():
+            if not STOP_SENT:
+                send_telegram("🛑 Market closing time reached! Preparing EOD Report...")
+                STOP_SENT = True
+                STARTED_SENT = False
+            
+            if not EOD_REPORT_SENT:
+                time.sleep(20)
+                send_individual_signal_reports()
+                EOD_REPORT_SENT = True
+            
+            time.sleep(60)
+            continue
+            
+        run_algo_parallel()
+        time.sleep(5)  # 5 second delay between scans
+        
+    except Exception as e:
+        error_msg = f"⚠️ Main loop error: {str(e)[:100]}"
+        send_telegram(error_msg)
+        time.sleep(60)
