@@ -27,7 +27,7 @@ INSTITUTIONAL_THRESHOLDS = {
 }
 
 MIN_INSTITUTIONAL_SCORE = 60
-MIN_VOLUME_SURGE = 1.8
+MIN_VOLUME_SURGE = 1.3  # Changed from 1.8 to 1.3
 MIN_EFFICIENCY_RATIO = 1.5
 
 OPENING_PLAY_ENABLED = True
@@ -141,7 +141,7 @@ def ensure_series(data):
     return data.iloc[:,0] if isinstance(data, pd.DataFrame) else data.squeeze()
 
 # --------- FETCH INDEX DATA FOR KEPT INDICES ---------
-def fetch_index_data(index, interval="1m", period="1d"):  # Changed to 1m for institutional analysis
+def fetch_index_data(index, interval="1m", period="1d"):
     symbol_map = {
         "NIFTY": "^NSEI", 
         "BANKNIFTY": "^NSEBANK", 
@@ -308,64 +308,39 @@ class InstitutionalPressureAnalyzer:
             avg_prev_efficiency = np.mean(prev_efficiencies) if prev_efficiencies else current_efficiency
             efficiency_ratio = round(current_efficiency / max(0.01, avg_prev_efficiency), 2)
             
-            # Momentum consistency
-            if len(prev_closes) >= 3:
-                short_momentum = (prev_closes[-1] - prev_closes[-3]) / prev_closes[-3] * 100
-                medium_momentum = (prev_closes[-1] - prev_closes[0]) / prev_closes[0] * 100
-                momentum_alignment = abs(short_momentum - medium_momentum)
-                
-                if momentum_alignment < 0.05:
-                    momentum_pressure = "STRONG"
-                elif momentum_alignment < 0.1:
-                    momentum_pressure = "MODERATE"
-                else:
-                    momentum_pressure = "WEAK"
-            else:
-                momentum_pressure = "NEUTRAL"
+            # Momentum consistency - ALWAYS MODERATE as requested
+            momentum_pressure = "MODERATE"
             
-            # Range expansion
-            current_range_pct = (curr_high - curr_low) / curr_open * 100 if curr_open > 0 else 0
-            prev_ranges_pct = [(prev_highs[i] - prev_lows[i]) / prev_opens[i] * 100 for i in range(len(prev_opens)) if prev_opens[i] > 0]
-            avg_prev_range_pct = np.mean(prev_ranges_pct) if prev_ranges_pct else current_range_pct
-            range_expansion = round(((current_range_pct - avg_prev_range_pct) / max(0.1, avg_prev_range_pct)) * 100, 2)
-            
-            # Institutional scoring
+            # SIMPLIFIED SCORING SYSTEM
             score = 0
             
-            # Volume scoring
-            if volume_surge_ratio > 3.0: score += 40
-            elif volume_surge_ratio > 2.0: score += 30
-            elif volume_surge_ratio > 1.5: score += 20
+            # Volume scoring (simplified)
+            if volume_surge_ratio >= 1.3:  # Your requirement
+                score += 30
             
-            # Efficiency scoring
-            if efficiency_ratio > 1.3: score += 25
-            elif efficiency_ratio > 0.8: score += 15
+            # Efficiency scoring (simplified)
+            if efficiency_ratio >= 1.5:  # Your requirement
+                score += 30
             
-            # Momentum scoring
-            if momentum_pressure == "STRONG": score += 20
-            elif momentum_pressure == "MODERATE": score += 10
-            
-            # Volatility scoring
-            if range_expansion > 50: score += 15
+            # Momentum scoring (always MODERATE)
+            if momentum_pressure == "MODERATE":
+                score += 20
             
             # Candle size scoring
             candle_size = abs(curr_close - curr_open)
-            if candle_size > 50: score += 20
-            elif candle_size > 30: score += 15
-            elif candle_size > 20: score += 10
+            if candle_size > 50: 
+                score += 20
+            elif candle_size > 30: 
+                score += 15
+            elif candle_size > 20: 
+                score += 10
             
             institutional_score = min(100, score)
             
-            # Pressure type determination
-            if institutional_score >= 70:
-                pressure_type = "STRONG_INSTITUTIONAL"
-                confidence = "VERY_HIGH"
-            elif institutional_score >= 50:
-                pressure_type = "MODERATE_INSTITUTIONAL"
+            # SIMPLIFIED PRESSURE TYPE DETERMINATION
+            if institutional_score >= 60:
+                pressure_type = "INSTITUTIONAL"
                 confidence = "HIGH"
-            elif institutional_score >= 30:
-                pressure_type = "LIGHT_INSTITUTIONAL"
-                confidence = "MEDIUM"
             else:
                 pressure_type = "RETAIL_DOMINATED"
                 confidence = "LOW"
@@ -379,22 +354,22 @@ class InstitutionalPressureAnalyzer:
             return {
                 'volume_surge_ratio': volume_surge_ratio,
                 'efficiency_ratio': efficiency_ratio,
+                'momentum_pressure': momentum_pressure,
                 'institutional_score': institutional_score,
                 'pressure_type': pressure_type,
                 'confidence': confidence,
-                'directional_pressure': directional_pressure,
-                'true_institutional_activity': pressure_type if institutional_score >= 30 else "RETAIL_DOMINATED"
+                'directional_pressure': directional_pressure
             }
             
         except Exception as e:
             return {
                 'volume_surge_ratio': 0.0,
                 'efficiency_ratio': 0.0,
+                'momentum_pressure': "MODERATE",
                 'institutional_score': 0,
                 'pressure_type': "RETAIL_DOMINATED",
                 'confidence': "LOW",
-                'directional_pressure': "NEUTRAL",
-                'true_institutional_activity': "RETAIL_DOMINATED"
+                'directional_pressure': "NEUTRAL"
             }
     
     def find_institutional_pressure(self, df, index):
@@ -430,7 +405,7 @@ class InstitutionalPressureAnalyzer:
                             current_row, prev_candles, direction
                         )
                         
-                        # Apply filters
+                        # Apply filters - SIMPLIFIED CONDITIONS
                         if (pressure_metrics['institutional_score'] >= MIN_INSTITUTIONAL_SCORE and
                             pressure_metrics['volume_surge_ratio'] >= MIN_VOLUME_SURGE and
                             pressure_metrics['efficiency_ratio'] >= MIN_EFFICIENCY_RATIO):
@@ -509,19 +484,16 @@ def format_institutional_analysis(index, pressure_signal):
 🎯 **DIRECTION**: {pressure_signal['direction']}
 📈 **POINTS MOVED**: {pressure_signal['points_moved']} points
 
-🏛️ **TRUE INSTITUTIONAL METRICS**:
+🏛️ **INSTITUTIONAL METRICS**:
 • Volume Surge: {metrics['volume_surge_ratio']}x
 • Price Efficiency: {metrics['efficiency_ratio']}x
-• Institutional Score: {metrics['institutional_score']}/100
+• Momentum Alignment: {metrics['momentum_pressure']}
 
-💼 **INSTITUTIONAL ASSESSMENT**:
+💼 **ASSESSMENT**:
+• Institutional Score: {metrics['institutional_score']}/100
 • Pressure Type: {metrics['pressure_type']}
 • Confidence: {metrics['confidence']}
 • Directional Pressure: {metrics['directional_pressure']}
-
-🎯 **TRADING IMPLICATION**:
-{metrics['directional_pressure']} | {metrics['confidence']} confidence
-True Activity: {metrics['true_institutional_activity']}
 
 ─────────────────────────────
 """
@@ -591,9 +563,9 @@ def send_signal(index, side, df, fakeout, strategy_key):
     
     entry = round(option_price)
     
-    # Calculate institutional targets (bigger moves)
+    # Calculate institutional targets
     if side == "CE":
-        base_move = max(current_price * 0.008, 40)  # Minimum 40 points
+        base_move = max(current_price * 0.008, 40)
         targets = [
             round(entry + base_move * 1.0),
             round(entry + base_move * 1.8),
@@ -602,7 +574,7 @@ def send_signal(index, side, df, fakeout, strategy_key):
         ]
         sl = round(entry - base_move * 0.8)
     else:  # PE
-        base_move = max(current_price * 0.008, 40)  # Minimum 40 points
+        base_move = max(current_price * 0.008, 40)
         targets = [
             round(entry + base_move * 1.0),
             round(entry + base_move * 1.8),
@@ -725,7 +697,7 @@ def run_algo_parallel():
     for t in threads: 
         t.join()
 
-# --------- EOD REPORT (KEEP EXISTING) ---------
+# --------- EOD REPORT ---------
 def send_individual_signal_reports():
     """Send EOD reports"""
     global daily_signals, all_generated_signals
@@ -792,7 +764,7 @@ while True:
             send_telegram("🚀 INSTITUTIONAL PRESSURE ALGO STARTED\n"
                          "✅ NIFTY, BANKNIFTY, SENSEX\n"
                          "✅ 5-Minute Monitoring\n"
-                         "✅ Institutional Pressure Detection")
+                         "✅ Simplified Institutional Pressure Detection")
             STARTED_SENT = True
             STOP_SENT = False
             MARKET_CLOSED_SENT = False
