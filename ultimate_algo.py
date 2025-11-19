@@ -1,5 +1,5 @@
 #INDEXBASED + EOD NOT COMMING - FIXED VERSION
-# MODIFIED WITH INSTITUTIONAL PRESSURE STRATEGY
+# MODIFIED WITH INSTITUTIONAL PRESSURE STRATEGY - COMPLETE FLOW
 
 import os
 import time
@@ -27,7 +27,7 @@ INSTITUTIONAL_THRESHOLDS = {
 }
 
 MIN_INSTITUTIONAL_SCORE = 60
-MIN_VOLUME_SURGE = 1.3  # Changed from 1.8 to 1.3
+MIN_VOLUME_SURGE = 1.3
 MIN_EFFICIENCY_RATIO = 1.5
 
 OPENING_PLAY_ENABLED = True
@@ -147,8 +147,30 @@ def fetch_index_data(index, interval="1m", period="1d"):
         "BANKNIFTY": "^NSEBANK", 
         "SENSEX": "^BSESN"
     }
-    df = yf.download(symbol_map[index], period=period, interval=interval, auto_adjust=True, progress=False)
-    return None if df.empty else df
+    
+    # FOR LIVE DATA - Use today's date specifically
+    today = datetime.now().strftime("%Y-%m-%d")
+    try:
+        # Fetch data for TODAY only for live trading
+        df = yf.download(
+            symbol_map[index], 
+            start=today,
+            interval=interval, 
+            progress=False,
+            prepost=True  # Include pre-market data
+        )
+        
+        # If no data for today, try with period="1d" as fallback
+        if df.empty:
+            df = yf.download(symbol_map[index], period="1d", interval=interval, progress=False)
+            
+        return None if df.empty else df
+        
+    except Exception as e:
+        print(f"Error fetching {index} data: {e}")
+        # Fallback to traditional method
+        df = yf.download(symbol_map[index], period="1d", interval=interval, progress=False)
+        return None if df.empty else df
 
 # --------- LOAD TOKEN MAP ---------
 def load_token_map():
@@ -338,8 +360,11 @@ class InstitutionalPressureAnalyzer:
             institutional_score = min(100, score)
             
             # SIMPLIFIED PRESSURE TYPE DETERMINATION
-            if institutional_score >= 60:
-                pressure_type = "INSTITUTIONAL"
+            if institutional_score >= 70:
+                pressure_type = "STRONG_INSTITUTIONAL"
+                confidence = "VERY_HIGH"
+            elif institutional_score >= 60:
+                pressure_type = "MODERATE_INSTITUTIONAL" 
                 confidence = "HIGH"
             else:
                 pressure_type = "RETAIL_DOMINATED"
@@ -381,8 +406,8 @@ class InstitutionalPressureAnalyzer:
             # Get the threshold for this index
             threshold = INSTITUTIONAL_THRESHOLDS.get(index, 20)
             
-            # Analyze last 5 candles
-            for i in range(5, min(10, len(df))):
+            # Analyze last 5 candles (focus on most recent)
+            for i in range(max(5, len(df)-5), len(df)):
                 try:
                     current_row = df.iloc[i]
                     prev1_row = df.iloc[i-1]
@@ -432,41 +457,26 @@ class InstitutionalPressureAnalyzer:
         except Exception as e:
             return None
 
-# --------- INSTITUTIONAL PRESSURE STRATEGY ---------
-def analyze_index_signal(index):
-    """INSTITUTIONAL PRESSURE STRATEGY - MAIN ANALYSIS"""
+# --------- CHECK IF DATA IS LIVE ---------
+def is_data_live(df):
+    """Check if the data is from today (live) or historical"""
+    if df is None or len(df) == 0:
+        return False
+    
     try:
-        # Use 1-minute data for institutional pressure detection
-        df = fetch_index_data(index, "1m", "1d")
-        if df is None or len(df) < 10:
-            return None
-
-        # Check cooldown
-        current_time = time.time()
-        if index in last_signal_time:
-            time_since_last = current_time - last_signal_time[index]
-            if time_since_last < signal_cooldown:
-                return None
-
-        # Analyze for institutional pressure
-        analyzer = InstitutionalPressureAnalyzer()
-        pressure_signal = analyzer.find_institutional_pressure(df, index)
+        latest_timestamp = df.index[-1]
+        if latest_timestamp.tzinfo is None:
+            latest_timestamp = pytz.UTC.localize(latest_timestamp)
         
-        if pressure_signal:
-            side = "CE" if pressure_signal['direction'] == "GREEN" else "PE"
-            fakeout = False
-            
-            # Format institutional analysis message
-            analysis_msg = format_institutional_analysis(index, pressure_signal)
-            send_telegram(analysis_msg)
-            
-            return side, df, fakeout, "institutional_pressure"
-            
-        return None
+        latest_ist = latest_timestamp.astimezone(pytz.timezone('Asia/Kolkata'))
+        today_ist = datetime.now(pytz.timezone('Asia/Kolkata'))
         
-    except Exception as e:
-        return None
+        # Check if data is from today
+        return latest_ist.date() == today_ist.date()
+    except:
+        return False
 
+# --------- FORMAT INSTITUTIONAL ANALYSIS ---------
 def format_institutional_analysis(index, pressure_signal):
     """Format institutional pressure analysis for Telegram"""
     metrics = pressure_signal['pressure_metrics']
@@ -484,16 +494,20 @@ def format_institutional_analysis(index, pressure_signal):
 🎯 **DIRECTION**: {pressure_signal['direction']}
 📈 **POINTS MOVED**: {pressure_signal['points_moved']} points
 
-🏛️ **INSTITUTIONAL METRICS**:
+🏛️ **TRUE INSTITUTIONAL METRICS**:
 • Volume Surge: {metrics['volume_surge_ratio']}x
 • Price Efficiency: {metrics['efficiency_ratio']}x
 • Momentum Alignment: {metrics['momentum_pressure']}
 
-💼 **ASSESSMENT**:
+💼 **INSTITUTIONAL ASSESSMENT**:
 • Institutional Score: {metrics['institutional_score']}/100
 • Pressure Type: {metrics['pressure_type']}
 • Confidence: {metrics['confidence']}
 • Directional Pressure: {metrics['directional_pressure']}
+
+🎯 **TRADING IMPLICATION**:
+{metrics['directional_pressure']} | {metrics['confidence']} confidence
+True Activity: {metrics['pressure_type']}
 
 ─────────────────────────────
 """
@@ -509,14 +523,17 @@ def can_send_signal(index, strike, option_type):
     
     # Check if same strike is already active
     if strike_key in active_strikes:
+        print(f"❌ Signal blocked: Same strike already active - {strike_key}")
         return False
         
     # Check cooldown for this index
     if index in last_signal_time:
         time_since_last = current_time - last_signal_time[index]
         if time_since_last < signal_cooldown:
+            print(f"❌ Signal blocked: Cooldown active for {index} - {int(signal_cooldown - time_since_last)}s remaining")
             return False
     
+    print(f"✅ Signal allowed: {strike_key}")
     return True
 
 def update_signal_tracking(index, strike, option_type, signal_id):
@@ -530,17 +547,26 @@ def update_signal_tracking(index, strike, option_type, signal_id):
     }
     
     last_signal_time[index] = time.time()
+    print(f"📝 Tracking updated: {strike_key}")
 
 def clear_completed_signal(signal_id):
     """Clear signal from active tracking when completed"""
     global active_strikes
     active_strikes = {k: v for k, v in active_strikes.items() if v['signal_id'] != signal_id}
+    print(f"🧹 Cleared completed signal: {signal_id}")
 
-# --------- UPDATED SIGNAL SENDING ---------
-def send_signal(index, side, df, fakeout, strategy_key):
+# --------- UPDATED SIGNAL SENDING WITH COMPLETE FLOW ---------
+def send_complete_signal(index, pressure_signal):
+    """Send complete signal flow: Analysis + Option Trade"""
     global signal_counter, all_generated_signals
     
+    side = "CE" if pressure_signal['direction'] == "GREEN" else "PE"
+    
     # Get current price for strike calculation
+    df = fetch_index_data(index, "1m", "1d")
+    if df is None:
+        return
+        
     current_price = float(ensure_series(df["Close"]).iloc[-1])
     strike = round_strike(index, current_price)
     
@@ -549,23 +575,26 @@ def send_signal(index, side, df, fakeout, strategy_key):
         
     # Check deduplication and cooldown
     if not can_send_signal(index, strike, side):
+        send_telegram(f"⏳ {index} {strike} {side}: Signal blocked (duplicate/cooldown)")
         return
         
     # Generate option symbol
     symbol = get_option_symbol(index, EXPIRIES[index], strike, side)
     if symbol is None:
+        send_telegram(f"❌ {index}: Could not generate valid symbol for strike {strike} {side}")
         return
     
     # Fetch option price
     option_price = fetch_option_price(symbol)
     if not option_price: 
+        send_telegram(f"❌ {index}: Could not fetch price for {symbol}")
         return
     
     entry = round(option_price)
     
-    # Calculate institutional targets
+    # Calculate institutional targets (bigger moves)
     if side == "CE":
-        base_move = max(current_price * 0.008, 40)
+        base_move = max(current_price * 0.008, 40)  # Minimum 40 points
         targets = [
             round(entry + base_move * 1.0),
             round(entry + base_move * 1.8),
@@ -574,7 +603,7 @@ def send_signal(index, side, df, fakeout, strategy_key):
         ]
         sl = round(entry - base_move * 0.8)
     else:  # PE
-        base_move = max(current_price * 0.008, 40)
+        base_move = max(current_price * 0.008, 40)  # Minimum 40 points
         targets = [
             round(entry + base_move * 1.0),
             round(entry + base_move * 1.8),
@@ -585,7 +614,7 @@ def send_signal(index, side, df, fakeout, strategy_key):
     
     targets_str = "//".join(str(t) for t in targets) + "++"
     
-    strategy_name = STRATEGY_NAMES.get(strategy_key, strategy_key.upper())
+    strategy_name = "INSTITUTIONAL PRESSURE"
     
     signal_id = f"SIG{signal_counter:04d}"
     signal_counter += 1
@@ -600,33 +629,43 @@ def send_signal(index, side, df, fakeout, strategy_key):
         "entry_price": entry,
         "targets": targets,
         "sl": sl,
-        "fakeout": fakeout,
+        "fakeout": False,
         "index_price": current_price
     }
+    
+    # STEP 1: Send Institutional Analysis
+    analysis_msg = format_institutional_analysis(index, pressure_signal)
+    analysis_msg_id = send_telegram(analysis_msg)
+    
+    # Wait 2 seconds
+    time.sleep(2)
+    
+    # STEP 2: Send Option Trade Signal
+    option_msg = (f"{'🟢' if side == 'CE' else '🔴'} {index} {strike} {side}\n"
+           f"SYMBOL: {symbol}\n"
+           f"ABOVE {entry}\n"
+           f"TARGETS: {targets_str}\n"
+           f"SL: {sl}\n"
+           f"FAKEOUT: NO\n"
+           f"STRATEGY: {strategy_name}\n"
+           f"SIGNAL ID: {signal_id}")
+    
+    option_msg_id = send_telegram(option_msg)
     
     # Update signal tracking
     update_signal_tracking(index, strike, side, signal_id)
     all_generated_signals.append(signal_data.copy())
     
-    msg = (f"🟢 {index} {strike} {side}\n"
-           f"SYMBOL: {symbol}\n"
-           f"ABOVE {entry}\n"
-           f"TARGETS: {targets_str}\n"
-           f"SL: {sl}\n"
-           f"FAKEOUT: {'YES' if fakeout else 'NO'}\n"
-           f"STRATEGY: {strategy_name}\n"
-           f"SIGNAL ID: {signal_id}")
-         
-    thread_id = send_telegram(msg)
-    
     # Start monitoring thread
-    start_monitoring(symbol, entry, targets, sl, fakeout, thread_id, strategy_name, signal_data)
+    start_monitoring(symbol, entry, targets, sl, option_msg_id, strategy_name, signal_data)
 
-def start_monitoring(symbol, entry, targets, sl, fakeout, thread_id, strategy_name, signal_data):
+def start_monitoring(symbol, entry, targets, sl, thread_id, strategy_name, signal_data):
     """Start monitoring thread for the signal"""
     def monitor_thread():
         max_price = entry
         targets_hit = 0
+        
+        print(f"🔍 Monitoring started: {symbol} for 5 minutes")
         
         # Monitor for 5 minutes
         end_time = time.time() + 300  # 5 minutes
@@ -634,6 +673,8 @@ def start_monitoring(symbol, entry, targets, sl, fakeout, thread_id, strategy_na
         while time.time() < end_time:
             current_price = fetch_option_price(symbol)
             if current_price:
+                current_price = round(current_price)
+                
                 if current_price > max_price:
                     max_price = current_price
                 
@@ -642,35 +683,84 @@ def start_monitoring(symbol, entry, targets, sl, fakeout, thread_id, strategy_na
                     if current_price >= target and i >= targets_hit:
                         targets_hit = i + 1
                         send_telegram(f"🎯 {symbol}: Target {targets_hit} hit at ₹{target}", reply_to=thread_id)
+                        print(f"🎯 Target {targets_hit} hit for {symbol}")
                 
                 # Check SL
                 if current_price <= sl:
                     send_telegram(f"🛑 {symbol}: SL hit at ₹{sl}", reply_to=thread_id)
+                    print(f"🛑 SL hit for {symbol}")
                     break
             
             time.sleep(5)  # Check every 5 seconds
         
         # Clear signal after monitoring
         clear_completed_signal(signal_data['signal_id'])
+        print(f"✅ Monitoring completed: {symbol}")
     
     thread = threading.Thread(target=monitor_thread)
     thread.daemon = True
     thread.start()
+
+# --------- INSTITUTIONAL PRESSURE STRATEGY ---------
+def analyze_index_signal(index):
+    """INSTITUTIONAL PRESSURE STRATEGY - COMPLETE FLOW"""
+    try:
+        # Use 1-minute data for institutional pressure detection
+        df = fetch_index_data(index, "1m", "1d")
+        if df is None or len(df) < 10:
+            return None
+
+        # CHECK IF DATA IS LIVE
+        if not is_data_live(df):
+            print(f"⚠️ {index} data is not live - skipping")
+            return None
+
+        # Check cooldown
+        current_time = time.time()
+        if index in last_signal_time:
+            time_since_last = current_time - last_signal_time[index]
+            if time_since_last < signal_cooldown:
+                return None
+
+        # Analyze for institutional pressure
+        analyzer = InstitutionalPressureAnalyzer()
+        pressure_signal = analyzer.find_institutional_pressure(df, index)
+        
+        if pressure_signal:
+            # CHECK IF SIGNAL IS FROM CURRENT TIME (not old data)
+            signal_time = pressure_signal['timestamp']
+            current_ist = datetime.now(pytz.timezone('Asia/Kolkata'))
+            time_diff = (current_ist - signal_time).total_seconds()
+            
+            # Only accept signals from last 2 minutes
+            if time_diff > 120:
+                print(f"🕒 Old signal ignored: {pressure_signal['time_str']}")
+                return None
+                
+            print(f"✅ LIVE SIGNAL DETECTED: {index} at {pressure_signal['time_str']}")
+            
+            # Send complete signal flow
+            send_complete_signal(index, pressure_signal)
+            return True
+            
+        return None
+        
+    except Exception as e:
+        print(f"Error analyzing {index}: {e}")
+        return None
 
 # --------- TRADE THREAD ---------
 def trade_thread(index):
     """Generate signals for each index"""
     result = analyze_index_signal(index)
     
-    if not result:
-        return
-        
-    side, df, fakeout, strategy_key = result
-    send_signal(index, side, df, fakeout, strategy_key)
+    if result:
+        print(f"🎯 Signal processed for {index}")
 
 # --------- MAIN LOOP ---------
 def run_algo_parallel():
     if not is_market_open(): 
+        print("❌ Market closed - skipping iteration")
         return
         
     if should_stop_trading():
@@ -730,6 +820,8 @@ def send_individual_signal_reports():
                f"─────────────────────────────")
         send_telegram(msg)
         time.sleep(1)
+    
+    send_telegram("✅ TRADING DAY COMPLETED! See you tomorrow at 9:15 AM! 🎯")
 
 # --------- MAIN EXECUTION ---------
 STARTED_SENT = False
@@ -764,7 +856,7 @@ while True:
             send_telegram("🚀 INSTITUTIONAL PRESSURE ALGO STARTED\n"
                          "✅ NIFTY, BANKNIFTY, SENSEX\n"
                          "✅ 5-Minute Monitoring\n"
-                         "✅ Simplified Institutional Pressure Detection")
+                         "✅ Institutional Pressure Detection")
             STARTED_SENT = True
             STOP_SENT = False
             MARKET_CLOSED_SENT = False
