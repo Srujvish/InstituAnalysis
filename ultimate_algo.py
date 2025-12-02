@@ -29,7 +29,7 @@ LIQUIDITY_ZONE_WIDTH = 0.003  # 0.3% zone for liquidity hunts
 
 # --------- EXPIRIES FOR KEPT INDICES ---------
 EXPIRIES = {
-    "NIFTY": "02 DEC 2025",
+    "NIFTY": "09 DEC 2025",
     "BANKNIFTY": "30 DEC 2025", 
     "SENSEX": "04 DEC 2025",
     "MIDCPNIFTY": "30 DEC 2025"
