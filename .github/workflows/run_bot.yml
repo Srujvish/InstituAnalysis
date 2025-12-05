@@ -15,13 +15,12 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.9'
+        python-version: '3.10'   # Recommended for sklearn stability
 
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        # FIXED: Added scikit-learn and joblib
-        pip install ta yfinance requests pyotp pandas SmartApi logzero websocket-client smartapi-python datetime pycryptodome multitasking peewee scikit-learn joblib
+        pip install -r requirements.txt
 
     - name: Run 20-Hour Algo Marathon
       env:
@@ -36,17 +35,12 @@ jobs:
         echo "🕒 Current IST: $(TZ='Asia/Kolkata' date '+%H:%M:%S')"
         echo "⏰ Will run for 20 hours automatically"
         
-        # Run for exactly 20 hours (72000 seconds)
         end_time=$(date -d "20 hours" +%s)
         
         while [ $(date +%s) -lt $end_time ]; do
           CURRENT_TIME_IST=$(TZ='Asia/Kolkata' date '+%H:%M:%S')
           echo "🔄 Running at: $CURRENT_TIME_IST IST"
-          
-          # Run one iteration
           python ultimate_algo.py
-          
-          # Wait 30 seconds before next iteration
           sleep 30
         done
         
