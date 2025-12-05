@@ -20,7 +20,8 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install ta yfinance requests pyotp pandas SmartApi logzero websocket-client smartapi-python datetime pycryptodome multitasking peewee
+        # FIXED: Added scikit-learn and joblib
+        pip install ta yfinance requests pyotp pandas SmartApi logzero websocket-client smartapi-python datetime pycryptodome multitasking peewee scikit-learn joblib
 
     - name: Run 20-Hour Algo Marathon
       env:
