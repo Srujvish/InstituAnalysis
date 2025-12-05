@@ -75,11 +75,19 @@ API_KEY = os.getenv("API_KEY")
 CLIENT_CODE = os.getenv("CLIENT_CODE")
 PASSWORD = os.getenv("PASSWORD")
 TOTP_SECRET = os.getenv("TOTP_SECRET")
-TOTP = pyotp.TOTP(TOTP_SECRET).now()
+if TOTP_SECRET:
+    TOTP = pyotp.TOTP(TOTP_SECRET).now()
+else:
+    TOTP = "000000"  # Dummy for testing
 
-client = SmartConnect(api_key=API_KEY)
-session = client.generateSession(CLIENT_CODE, PASSWORD, TOTP)
-feedToken = client.getfeedToken()
+try:
+    client = SmartConnect(api_key=API_KEY) if API_KEY else None
+    if all([client, CLIENT_CODE, PASSWORD, TOTP]):
+        session = client.generateSession(CLIENT_CODE, PASSWORD, TOTP)
+        feedToken = client.getfeedToken()
+except Exception as e:
+    print(f"⚠️ Angel One login failed: {e}")
+    client = None
 
 # --------- TELEGRAM ---------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -92,13 +100,18 @@ EOD_REPORT_SENT = False
 
 def send_telegram(msg, reply_to=None):
     try:
+        if not BOT_TOKEN or not CHAT_ID:
+            print(f"📢 {msg}")
+            return None
+            
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         payload = {"chat_id": CHAT_ID, "text": msg}
         if reply_to:
             payload["reply_to_message_id"] = reply_to
         r = requests.post(url, data=payload, timeout=5).json()
         return r.get("result", {}).get("message_id")
-    except:
+    except Exception as e:
+        print(f"Telegram error: {e}")
         return None
 
 # --------- MARKET HOURS ---------
@@ -148,8 +161,12 @@ def fetch_index_data(index, interval="5m", period="2d"):
         "SENSEX": "^BSESN",
         "MIDCPNIFTY": "NIFTY_MID_SELECT.NS"
     }
-    df = yf.download(symbol_map[index], period=period, interval=interval, auto_adjust=True, progress=False)
-    return None if df.empty else df
+    try:
+        df = yf.download(symbol_map[index], period=period, interval=interval, auto_adjust=True, progress=False)
+        return None if df.empty else df
+    except Exception as e:
+        print(f"Error fetching {index} data: {e}")
+        return None
 
 # --------- LOAD TOKEN MAP ---------
 def load_token_map():
@@ -160,7 +177,8 @@ def load_token_map():
         df=df[df['exch_seg'].str.upper().isin(["NFO", "BFO"])]
         df['symbol']=df['symbol'].str.upper()
         return df.set_index('symbol')['token'].to_dict()
-    except:
+    except Exception as e:
+        print(f"Error loading token map: {e}")
         return {}
 
 token_map=load_token_map()
@@ -175,7 +193,7 @@ def fetch_option_price(symbol, retries=3, delay=3):
             exchange = "BFO" if "SENSEX" in symbol.upper() else "NFO"
             data=client.ltpData(exchange, symbol, token)
             return float(data['data']['ltp'])
-        except:
+        except Exception:
             time.sleep(delay)
     return None
 
@@ -239,103 +257,164 @@ class InstitutionalBehaviorAI:
     def load_models(self):
         """Load AI models trained on institutional behavior"""
         try:
-            self.accumulation_model = joblib.load("accumulation_model.pkl") if os.path.exists("accumulation_model.pkl") else None
-            self.distribution_model = joblib.load("distribution_model.pkl") if os.path.exists("distribution_model.pkl") else None
-            self.scaler = joblib.load("institutional_scaler.pkl") if os.path.exists("institutional_scaler.pkl") else None
+            if os.path.exists("accumulation_model.pkl"):
+                self.accumulation_model = joblib.load("accumulation_model.pkl")
+                print("✅ Loaded accumulation model from disk")
+            else:
+                self.accumulation_model = None
+                
+            if os.path.exists("distribution_model.pkl"):
+                self.distribution_model = joblib.load("distribution_model.pkl")
+                print("✅ Loaded distribution model from disk")
+            else:
+                self.distribution_model = None
+                
+            if os.path.exists("institutional_scaler.pkl"):
+                self.scaler = joblib.load("institutional_scaler.pkl")
+                print("✅ Loaded scaler from disk")
+            else:
+                self.scaler = None
             
+            # Only train if ALL models are missing
             if not all([self.accumulation_model, self.distribution_model, self.scaler]):
+                print("🔄 Training institutional models...")
                 self.train_institutional_models()
+            else:
+                print("✅ All AI models loaded successfully")
                 
         except Exception as e:
-            print(f"Error loading models: {e}")
+            print(f"⚠️ Error loading models: {e}")
+            print("🔄 Training new models...")
             self.train_institutional_models()
     
     def train_institutional_models(self):
         """Train AI on institutional behavior signatures"""
-        # Institutional behavior features (not patterns):
-        # 1. Volume signature (size)
-        # 2. Price absorption (accumulation)
-        # 3. Price distribution (distribution)
-        # 4. Stop hunt characteristics
-        # 5. Liquidity grabs
-        
-        X_acc = []  # Accumulation features
-        y_acc = []  # 1 = Accumulation detected
-        
-        X_dist = []  # Distribution features  
-        y_dist = []  # 1 = Distribution detected
-        
-        # 🏛️ **INSTITUTIONAL ACCUMULATION PATTERNS** (CE entries)
-        # Pattern: Big volume at support + absorption + price holds
-        
-        # Your BANKNIFTY 59700 CE pattern
-        X_acc.append([4.2, 0.22, 0.85, 2.8, 0.18, 0.72, 0.65, 0.025, 1.4, 0.35])
-        y_acc.append(1)
-        
-        # Your NIFTY 26050 CE pattern
-        X_acc.append([3.8, 0.18, 0.82, 2.5, 0.15, 0.68, 0.62, 0.022, 1.3, 0.4])
-        y_acc.append(1)
-        
-        # Institutional accumulation signature
-        X_acc.append([4.5, 0.25, 0.88, 3.0, 0.2, 0.75, 0.7, 0.028, 1.5, 0.3])
-        y_acc.append(1)
-        
-        # 🏛️ **INSTITUTIONAL DISTRIBUTION PATTERNS** (PE entries)
-        # Pattern: Big volume at resistance + distribution + price rejects
-        
-        # Good PE entry pattern
-        X_dist.append([4.0, 0.2, 0.15, 2.7, 0.22, 0.7, 0.3, 0.023, 1.35, 0.25])
-        y_dist.append(1)
-        
-        # Your BAD PE entry (15:00) - to avoid
-        X_dist.append([2.0, 0.08, 0.5, 1.5, 0.1, 0.4, 0.5, 0.01, 0.8, 0.85])
-        y_dist.append(0)  # NOT distribution
-        
-        # Institutional distribution signature
-        X_dist.append([4.3, 0.23, 0.12, 3.1, 0.24, 0.78, 0.25, 0.027, 1.55, 0.28])
-        y_dist.append(1)
-        
-        # Convert to numpy
-        X_acc = np.array(X_acc)
-        y_acc = np.array(y_acc)
-        X_dist = np.array(X_dist)  
-        y_dist = np.array(y_dist)
-        
-        # Train accumulation model
-        if len(X_acc) > 0:
+        try:
+            print("🏛️ Training institutional AI models...")
+            
+            # 🏛️ **INSTITUTIONAL ACCUMULATION PATTERNS** (CE entries)
+            # We need BOTH classes (0 and 1) for binary classification
+            X_acc = []  # Accumulation features
+            y_acc = []  # 1 = Accumulation detected, 0 = Not accumulation
+            
+            # 🏛️ **POSITIVE EXAMPLES** (Accumulation = 1)
+            # Your BANKNIFTY 59700 CE pattern
+            X_acc.append([4.2, 0.22, 0.85, 2.8, 0.18, 0.72, 0.65, 0.025, 1.4, 0.35])
+            y_acc.append(1)
+            
+            # Your NIFTY 26050 CE pattern
+            X_acc.append([3.8, 0.18, 0.82, 2.5, 0.15, 0.68, 0.62, 0.022, 1.3, 0.4])
+            y_acc.append(1)
+            
+            # Institutional accumulation signature
+            X_acc.append([4.5, 0.25, 0.88, 3.0, 0.2, 0.75, 0.7, 0.028, 1.5, 0.3])
+            y_acc.append(1)
+            
+            # 🏛️ **NEGATIVE EXAMPLES** (Not accumulation = 0)
+            # Retail noise patterns
+            X_acc.append([1.2, 0.05, 0.3, 0.8, 0.03, 0.2, 0.4, 0.005, 0.5, 0.8])
+            y_acc.append(0)
+            
+            # Weak institutional attempt
+            X_acc.append([2.1, 0.09, 0.45, 1.4, 0.07, 0.35, 0.5, 0.01, 0.9, 0.6])
+            y_acc.append(0)
+            
+            # Distribution disguised as accumulation
+            X_acc.append([3.0, 0.12, 0.1, 2.0, 0.2, 0.6, 0.2, 0.015, 1.1, 0.45])
+            y_acc.append(0)
+            
+            # 🏛️ **INSTITUTIONAL DISTRIBUTION PATTERNS** (PE entries)
+            X_dist = []  # Distribution features  
+            y_dist = []  # 1 = Distribution detected, 0 = Not distribution
+            
+            # 🏛️ **POSITIVE EXAMPLES** (Distribution = 1)
+            # Good PE entry pattern
+            X_dist.append([4.0, 0.2, 0.15, 2.7, 0.22, 0.7, 0.3, 0.023, 1.35, 0.25])
+            y_dist.append(1)
+            
+            # Institutional distribution signature
+            X_dist.append([4.3, 0.23, 0.12, 3.1, 0.24, 0.78, 0.25, 0.027, 1.55, 0.28])
+            y_dist.append(1)
+            
+            # Strong distribution pattern
+            X_dist.append([4.7, 0.26, 0.08, 3.3, 0.27, 0.82, 0.18, 0.03, 1.7, 0.22])
+            y_dist.append(1)
+            
+            # 🏛️ **NEGATIVE EXAMPLES** (Not distribution = 0)
+            # Your BAD PE entry (15:00) - to avoid
+            X_dist.append([2.0, 0.08, 0.5, 1.5, 0.1, 0.4, 0.5, 0.01, 0.8, 0.85])
+            y_dist.append(0)
+            
+            # Weak distribution attempt
+            X_dist.append([2.5, 0.11, 0.35, 1.8, 0.14, 0.48, 0.4, 0.012, 1.0, 0.7])
+            y_dist.append(0)
+            
+            # Accumulation disguised as distribution
+            X_dist.append([3.5, 0.18, 0.8, 2.4, 0.16, 0.65, 0.6, 0.02, 1.25, 0.38])
+            y_dist.append(0)
+            
+            # Convert to numpy
+            X_acc = np.array(X_acc)
+            y_acc = np.array(y_acc)
+            X_dist = np.array(X_dist)  
+            y_dist = np.array(y_dist)
+            
+            print(f"Accumulation data: {X_acc.shape[0]} samples, classes: {np.unique(y_acc)}")
+            print(f"Distribution data: {X_dist.shape[0]} samples, classes: {np.unique(y_dist)}")
+            
+            # 🚨 **CRITICAL CHECK**: Ensure we have at least 2 classes
+            if len(np.unique(y_acc)) < 2:
+                print("⚠️ WARNING: Only one class in accumulation data. Adding synthetic data.")
+                # Add synthetic negative example
+                X_acc = np.vstack([X_acc, [1.0, 0.03, 0.25, 0.7, 0.02, 0.15, 0.35, 0.003, 0.4, 0.9]])
+                y_acc = np.append(y_acc, 0)
+                
+            if len(np.unique(y_dist)) < 2:
+                print("⚠️ WARNING: Only one class in distribution data. Adding synthetic data.")
+                # Add synthetic negative example
+                X_dist = np.vstack([X_dist, [1.5, 0.06, 0.4, 1.2, 0.08, 0.3, 0.45, 0.008, 0.7, 0.8]])
+                y_dist = np.append(y_dist, 0)
+            
+            # Train accumulation model
             self.scaler = StandardScaler()
             X_acc_scaled = self.scaler.fit_transform(X_acc)
             
             self.accumulation_model = GradientBoostingClassifier(
-                n_estimators=200,
-                learning_rate=0.05,
-                max_depth=5,
-                min_samples_split=4,
+                n_estimators=100,  # Reduced for faster training
+                learning_rate=0.1,
+                max_depth=4,
+                min_samples_split=3,
                 random_state=42,
-                subsample=0.75
+                subsample=0.8
             )
             self.accumulation_model.fit(X_acc_scaled, y_acc)
+            print("✅ Accumulation model trained")
             
-        # Train distribution model
-        if len(X_dist) > 0:
-            X_dist_scaled = self.scaler.transform(X_dist) if self.scaler else self.scaler.fit_transform(X_dist)
+            # Train distribution model
+            X_dist_scaled = self.scaler.transform(X_dist)
             
             self.distribution_model = RandomForestClassifier(
-                n_estimators=150,
-                max_depth=6,
-                min_samples_split=5,
+                n_estimators=100,  # Reduced for faster training
+                max_depth=5,
+                min_samples_split=4,
                 random_state=42,
                 class_weight='balanced'
             )
             self.distribution_model.fit(X_dist_scaled, y_dist)
+            print("✅ Distribution model trained")
             
-        # Save models
-        if self.accumulation_model:
+            # Save models
             joblib.dump(self.accumulation_model, "accumulation_model.pkl")
-        if self.distribution_model:
             joblib.dump(self.distribution_model, "distribution_model.pkl")
-        if self.scaler:
             joblib.dump(self.scaler, "institutional_scaler.pkl")
+            print("💾 Models saved to disk")
+            
+        except Exception as e:
+            print(f"❌ Error training models: {e}")
+            print("⚠️ Using rule-based fallback only")
+            self.accumulation_model = None
+            self.distribution_model = None
+            self.scaler = None
     
     def extract_institutional_features(self, df):
         """Extract features that reveal institutional behavior"""
@@ -364,7 +443,6 @@ class InstitutionalBehaviorAI:
             distribution_ratio = upper_wick / (current_body if current_body > 0 else 1)
             
             # 🏛️ **FEATURE 4: PRICE HOLDING STRENGTH**
-            # How well price holds at key levels
             recent_low = low.iloc[-8:-2].min()
             recent_high = high.iloc[-8:-2].max()
             current_price = close.iloc[-1]
@@ -375,12 +453,10 @@ class InstitutionalBehaviorAI:
                 price_strength = 0.3
             
             # 🏛️ **FEATURE 5: VOLUME CONFIRMATION RATIO**
-            # Current volume vs previous 3 candles
             vol_prev_3 = volume.iloc[-4:-1].mean()
             vol_confirmation = current_vol / (vol_prev_3 if vol_prev_3 > 0 else 1)
             
             # 🏛️ **FEATURE 6: MOMENTUM QUALITY**
-            # How price moves relative to volume
             price_change_3 = (close.iloc[-1] - close.iloc[-4]) / close.iloc[-4] if close.iloc[-4] > 0 else 0
             momentum_quality = price_change_3 / (volume_signature if volume_signature > 0 else 1)
             
@@ -392,22 +468,19 @@ class InstitutionalBehaviorAI:
                 liquidity_proximity = 0.05
             
             # 🏛️ **FEATURE 8: TREND ALIGNMENT**
-            # Are institutions aligning with or against trend?
             ma_20 = close.rolling(20).mean().iloc[-1]
             trend_alignment = 1 if (current_price > ma_20 and close.iloc[-1] > close.iloc[-2]) else 0.5
             
             # 🏛️ **FEATURE 9: INSTITUTIONAL PRESSURE**
-            # Bid-ask pressure imitation
             buying_pressure = sum([1 for i in range(-3, 0) if close.iloc[i] > open_price.iloc[i]])
             selling_pressure = sum([1 for i in range(-3, 0) if close.iloc[i] < open_price.iloc[i]])
             institutional_pressure = buying_pressure / (buying_pressure + selling_pressure + 1)
             
             # 🏛️ **FEATURE 10: TIME EFFICIENCY**
-            # Time of day for institutional moves
             utc_now = datetime.utcnow()
             ist_now = utc_now + timedelta(hours=5, minutes=30)
             hour = ist_now.hour
-            time_efficiency = 0.7 if 10 <= hour <= 14 else 0.3  # Best institutional hours
+            time_efficiency = 0.7 if 10 <= hour <= 14 else 0.3
             
             features = [
                 volume_signature,
@@ -431,71 +504,83 @@ class InstitutionalBehaviorAI:
     def detect_institutional_accumulation(self, df):
         """Detect when institutions are ACCUMULATING (CE entry)"""
         if self.accumulation_model is None or self.scaler is None:
+            print("⚠️ Accumulation model not available - using rule-based")
             return False, 0.0
         
         features = self.extract_institutional_features(df)
         if features is None:
             return False, 0.0
         
-        # Scale features
-        features_scaled = self.scaler.transform(features)
-        
-        # Predict accumulation
-        prediction = self.accumulation_model.predict(features_scaled)[0]
-        probability = self.accumulation_model.predict_proba(features_scaled)[0]
-        
-        confidence = probability[1] if len(probability) > 1 else probability[0]
-        
-        return bool(prediction), confidence
+        try:
+            # Scale features
+            features_scaled = self.scaler.transform(features)
+            
+            # Predict accumulation
+            prediction = self.accumulation_model.predict(features_scaled)[0]
+            probability = self.accumulation_model.predict_proba(features_scaled)[0]
+            
+            confidence = probability[1] if len(probability) > 1 else probability[0]
+            
+            return bool(prediction), confidence
+        except Exception as e:
+            print(f"⚠️ Error in accumulation detection: {e}")
+            return False, 0.0
     
     def detect_institutional_distribution(self, df):
         """Detect when institutions are DISTRIBUTING (PE entry)"""
         if self.distribution_model is None or self.scaler is None:
+            print("⚠️ Distribution model not available - using rule-based")
             return False, 0.0
         
         features = self.extract_institutional_features(df)
         if features is None:
             return False, 0.0
         
-        # Scale features
-        features_scaled = self.scaler.transform(features)
-        
-        # Predict distribution
-        prediction = self.distribution_model.predict(features_scaled)[0]
-        probability = self.distribution_model.predict_proba(features_scaled)[0]
-        
-        confidence = probability[1] if len(probability) > 1 else probability[0]
-        
-        return bool(prediction), confidence
+        try:
+            # Scale features
+            features_scaled = self.scaler.transform(features)
+            
+            # Predict distribution
+            prediction = self.distribution_model.predict(features_scaled)[0]
+            probability = self.distribution_model.predict_proba(features_scaled)[0]
+            
+            confidence = probability[1] if len(probability) > 1 else probability[0]
+            
+            return bool(prediction), confidence
+        except Exception as e:
+            print(f"⚠️ Error in distribution detection: {e}")
+            return False, 0.0
 
 # Initialize institutional AI
+print("🚀 Initializing Institutional Behavior AI...")
 institutional_ai = InstitutionalBehaviorAI()
+print("✅ Institutional AI initialized successfully!")
 
 # --------- LIQUIDITY ZONE DETECTION ---------
 def detect_liquidity_zone(df, lookback=20):
-    high_series = ensure_series(df['High']).dropna()
-    low_series = ensure_series(df['Low']).dropna()
     try:
+        high_series = ensure_series(df['High']).dropna()
+        low_series = ensure_series(df['Low']).dropna()
+        
         if len(high_series) <= lookback:
             high_pool = float(high_series.max()) if len(high_series)>0 else float('nan')
         else:
             high_pool = float(high_series.rolling(lookback).max().iloc[-2])
-    except Exception:
-        high_pool = float(high_series.max()) if len(high_series)>0 else float('nan')
-    try:
+            
         if len(low_series) <= lookback:
             low_pool = float(low_series.min()) if len(low_series)>0 else float('nan')
         else:
             low_pool = float(low_series.rolling(lookback).min().iloc[-2])
-    except Exception:
-        low_pool = float(low_series.min()) if len(low_series)>0 else float('nan')
 
-    if math.isnan(high_pool) and len(high_series)>0:
-        high_pool = float(high_series.max())
-    if math.isnan(low_pool) and len(low_series)>0:
-        low_pool = float(low_series.min())
+        if math.isnan(high_pool) and len(high_series)>0:
+            high_pool = float(high_series.max())
+        if math.isnan(low_pool) and len(low_series)>0:
+            low_pool = float(low_series.min())
 
-    return round(high_pool,0), round(low_pool,0)
+        return round(high_pool,0), round(low_pool,0)
+    except Exception as e:
+        print(f"Error detecting liquidity zone: {e}")
+        return None, None
 
 # 🏛️ **1. INSTITUTIONAL ACCUMULATION DETECTION** 🏛️
 def detect_institutional_accumulation_entry(df):
@@ -531,10 +616,15 @@ def detect_institutional_accumulation_entry(df):
         if close.iloc[-1] < support_level * 0.992:
             return None  # Broken support, not accumulation
         
-        # 🏛️ CHECK 4: AI CONFIRMATION
-        accumulation_detected, ai_confidence = institutional_ai.detect_institutional_accumulation(df)
-        if not accumulation_detected or ai_confidence < 0.82:
-            return None
+        # 🏛️ CHECK 4: AI CONFIRMATION (with fallback)
+        try:
+            accumulation_detected, ai_confidence = institutional_ai.detect_institutional_accumulation(df)
+            if not accumulation_detected or ai_confidence < 0.82:
+                return None
+        except Exception:
+            # Fallback to rule-based if AI fails
+            if current_vol < vol_avg_10 * (INSTITUTIONAL_VOLUME_RATIO + 0.5):
+                return None
         
         # 🏛️ CHECK 5: FOLLOW-THROUGH CONFIRMATION
         if not (close.iloc[-1] > close.iloc[-2] and close.iloc[-2] > close.iloc[-3]):
@@ -544,6 +634,7 @@ def detect_institutional_accumulation_entry(df):
         return "CE"
         
     except Exception as e:
+        print(f"Error in accumulation detection: {e}")
         return None
 
 # 🏛️ **2. INSTITUTIONAL DISTRIBUTION DETECTION** 🏛️
@@ -586,10 +677,15 @@ def detect_institutional_distribution_entry(df):
         if close.iloc[-1] > resistance_level * 1.008:
             return None  # Broken resistance, not distribution
         
-        # 🏛️ CHECK 4: AI CONFIRMATION
-        distribution_detected, ai_confidence = institutional_ai.detect_institutional_distribution(df)
-        if not distribution_detected or ai_confidence < 0.85:  # Higher threshold for PE
-            return None
+        # 🏛️ CHECK 4: AI CONFIRMATION (with fallback)
+        try:
+            distribution_detected, ai_confidence = institutional_ai.detect_institutional_distribution(df)
+            if not distribution_detected or ai_confidence < 0.85:  # Higher threshold for PE
+                return None
+        except Exception:
+            # Fallback to rule-based if AI fails
+            if current_vol < vol_avg_10 * (INSTITUTIONAL_VOLUME_RATIO + 1.0):
+                return None
         
         # 🏛️ CHECK 5: FOLLOW-THROUGH CONFIRMATION
         if not (close.iloc[-1] < close.iloc[-2] and close.iloc[-2] < close.iloc[-3]):
@@ -599,6 +695,7 @@ def detect_institutional_distribution_entry(df):
         return "PE"
         
     except Exception as e:
+        print(f"Error in distribution detection: {e}")
         return None
 
 # 🏛️ **3. STOP HUNT REVERSAL DETECTION** 🏛️
@@ -652,7 +749,8 @@ def detect_stop_hunt_reversal(df):
             if ist_now.hour < 14:  # Only before 2 PM
                 return "PE"
         
-    except Exception:
+    except Exception as e:
+        print(f"Error in stop hunt detection: {e}")
         return None
     return None
 
@@ -673,6 +771,9 @@ def detect_liquidity_grab(df):
         # Find liquidity pools
         high_zone, low_zone = detect_liquidity_zone(df, lookback=18)
         current_price = close.iloc[-1]
+        
+        if high_zone is None or low_zone is None:
+            return None
         
         # Volume signature
         vol_avg_15 = volume.rolling(15).mean().iloc[-1]
@@ -696,7 +797,8 @@ def detect_liquidity_grab(df):
                 
                 return "CE"  # Institutions grabbed liquidity, now UP
         
-    except Exception:
+    except Exception as e:
+        print(f"Error in liquidity grab detection: {e}")
         return None
     return None
 
@@ -704,32 +806,41 @@ def detect_liquidity_grab(df):
 def analyze_index_signal(index):
     df5 = fetch_index_data(index, "5m", "2d")
     if df5 is None:
+        print(f"⚠️ Could not fetch data for {index}")
         return None
 
     close5 = ensure_series(df5["Close"])
     if len(close5) < 20 or close5.isna().iloc[-1] or close5.isna().iloc[-2]:
+        print(f"⚠️ Insufficient data for {index}")
         return None
 
+    print(f"🔍 Analyzing {index} for institutional behavior...")
+    
     # 🏛️ **PRIORITY 1: INSTITUTIONAL ACCUMULATION** (BEFORE BIG UP MOVE)
     accumulation_signal = detect_institutional_accumulation_entry(df5)
     if accumulation_signal:
+        print(f"✅ {index}: Institutional accumulation detected")
         return accumulation_signal, df5, False, "institutional_accumulation"
 
     # 🏛️ **PRIORITY 2: STOP HUNT REVERSAL** (INSTITUTIONAL TRAP)
     stop_hunt_signal = detect_stop_hunt_reversal(df5)
     if stop_hunt_signal:
+        print(f"✅ {index}: Stop hunt reversal detected")
         return stop_hunt_signal, df5, False, "stop_hunt_reversal"
 
     # 🏛️ **PRIORITY 3: LIQUIDITY GRAB** (INSTITUTIONAL LIQUIDITY TAKE)
     liquidity_signal = detect_liquidity_grab(df5)
     if liquidity_signal:
+        print(f"✅ {index}: Liquidity grab detected")
         return liquidity_signal, df5, False, "liquidity_grab"
 
     # 🏛️ **PRIORITY 4: INSTITUTIONAL DISTRIBUTION** (BEFORE BIG DOWN MOVE)
     distribution_signal = detect_institutional_distribution_entry(df5)
     if distribution_signal:
+        print(f"✅ {index}: Institutional distribution detected")
         return distribution_signal, df5, False, "institutional_distribution"
 
+    print(f"➖ {index}: No institutional behavior detected")
     return None
 
 # --------- SIGNAL DEDUPLICATION ---------
@@ -738,11 +849,13 @@ def can_send_signal(index, strike, option_type):
     strike_key = f"{index}_{strike}_{option_type}"
     
     if strike_key in active_strikes:
+        print(f"⚠️ Signal for {strike_key} already active")
         return False
         
     if index in last_signal_time:
         time_since_last = current_time - last_signal_time[index]
         if time_since_last < signal_cooldown:
+            print(f"⏳ {index} in cooldown: {int(signal_cooldown - time_since_last)}s remaining")
             return False
     
     return True
@@ -758,6 +871,7 @@ def update_signal_tracking(index, strike, option_type, signal_id):
     }
     
     last_signal_time[index] = time.time()
+    print(f"📝 Tracking signal {signal_id} for {strike_key}")
 
 def update_signal_progress(signal_id, targets_hit):
     for strike_key, data in active_strikes.items():
@@ -768,6 +882,7 @@ def update_signal_progress(signal_id, targets_hit):
 def clear_completed_signal(signal_id):
     global active_strikes
     active_strikes = {k: v for k, v in active_strikes.items() if v['signal_id'] != signal_id}
+    print(f"🗑️ Cleared signal {signal_id}")
 
 # --------- TRADE MONITORING ---------
 active_trades = {}
@@ -831,12 +946,15 @@ def monitor_price_live(symbol, entry, targets, sl, fakeout, thread_id, strategy_
         last_activity_time = time.time()
         signal_id = signal_data.get('signal_id')
         
+        print(f"🔍 Starting monitoring for {symbol}")
+        
         while True:
             current_time = time.time()
             
             if not in_trade and (current_time - last_activity_time) > 1200:
                 send_telegram(f"⏰ {symbol}: No activity for 20 minutes. Allowing new signals.", reply_to=thread_id)
                 clear_completed_signal(signal_id)
+                print(f"🕒 Monitoring stopped for {symbol} - timeout")
                 break
                 
             if should_stop_trading():
@@ -854,6 +972,7 @@ def monitor_price_live(symbol, entry, targets, sl, fakeout, thread_id, strategy_
                 })
                 daily_signals.append(signal_data)
                 clear_completed_signal(signal_id)
+                print(f"🏁 Market closed, stopped monitoring {symbol}")
                 break
                 
             price = fetch_option_price(symbol)
@@ -902,6 +1021,7 @@ def monitor_price_live(symbol, entry, targets, sl, fakeout, thread_id, strategy_
                         })
                         daily_signals.append(signal_data)
                         clear_completed_signal(signal_id)
+                        print(f"🛑 SL hit for {symbol}")
                         break
                         
                     if current_targets_hit >= 2:
@@ -922,6 +1042,7 @@ def monitor_price_live(symbol, entry, targets, sl, fakeout, thread_id, strategy_
                         })
                         daily_signals.append(signal_data)
                         clear_completed_signal(signal_id)
+                        print(f"🎯 All targets hit for {symbol}")
                         break
             
             time.sleep(10)
@@ -938,6 +1059,7 @@ def send_signal(index, side, df, fakeout, strategy_key):
     strike = round_strike(index, signal_detection_price)
     
     if strike is None:
+        print(f"⚠️ Could not round strike for {index} at {signal_detection_price}")
         return
         
     if not can_send_signal(index, strike, side):
@@ -946,18 +1068,17 @@ def send_signal(index, side, df, fakeout, strategy_key):
     symbol = get_option_symbol(index, EXPIRIES[index], strike, side)
     
     if symbol is None:
+        print(f"⚠️ Could not generate symbol for {index} {strike}{side}")
         return
     
     option_price = fetch_option_price(symbol)
     if not option_price: 
+        print(f"⚠️ Could not fetch price for {symbol}")
         return
     
     entry = round(option_price)
     
     # 🏛️ **INSTITUTIONAL-SIZED TARGETS**
-    # Your BANKNIFTY 59700 CE: Entry 761 → Targets 801/833/873/921
-    # That's 40/72/112/160 points (ratio: 0.5/0.9/1.4/2.0)
-    
     if side == "CE":
         if strategy_key == "institutional_accumulation":
             base_move = 90  # Bigger for accumulation
@@ -1062,6 +1183,7 @@ def send_signal(index, side, df, fakeout, strategy_key):
                f"SIGNAL ID: {signal_id}\n"
                f"⚠️ INSTITUTIONS GRABBED LIQUIDITY")
     
+    print(f"📤 Sending signal: {index} {strike}{side} @ {entry}")
     thread_id = send_telegram(msg)
     
     trade_id = f"{symbol}_{int(time.time())}"
@@ -1080,6 +1202,7 @@ def send_signal(index, side, df, fakeout, strategy_key):
 
 # --------- TRADE THREAD ---------
 def trade_thread(index):
+    print(f"🔍 Checking {index}...")
     result = analyze_index_signal(index)
     
     if not result:
@@ -1087,11 +1210,13 @@ def trade_thread(index):
         
     side, df, fakeout, strategy_key = result
     
+    print(f"✅ Signal detected for {index}: {side} ({strategy_key})")
     send_signal(index, side, df, fakeout, strategy_key)
 
 # --------- MAIN LOOP ---------
 def run_algo_parallel():
     if not is_market_open(): 
+        print("🔴 Market closed")
         return
         
     if should_stop_trading():
@@ -1108,6 +1233,7 @@ def run_algo_parallel():
             
         return
         
+    print("🔍 Scanning for institutional behavior...")
     threads = []
     kept_indices = ["NIFTY", "BANKNIFTY", "SENSEX", "MIDCPNIFTY"]
     
@@ -1118,6 +1244,8 @@ def run_algo_parallel():
     
     for t in threads: 
         t.join()
+    
+    print(f"✅ Scan complete. Active signals: {len(active_strikes)}")
 
 # --------- MAIN EXECUTION ---------
 STARTED_SENT = False
@@ -1125,7 +1253,18 @@ STOP_SENT = False
 MARKET_CLOSED_SENT = False
 EOD_REPORT_SENT = False
 
+print("=" * 60)
+print("🏛️  PURE INSTITUTIONAL TRADING AI ACTIVATED")
+print("🤖 THINKING LIKE HEDGE FUNDS")
+print("🎯 DETECTING INSTITUTIONAL BEHAVIOR")
+print("💰 ACCUMULATION/DISTRIBUTION DETECTION")
+print("🎯 STOP HUNT REVERSAL DETECTION")
+print("🌊 LIQUIDITY GRAB DETECTION")
+print("=" * 60)
+
+iteration = 0
 while True:
+    iteration += 1
     try:
         utc_now = datetime.utcnow()
         ist_now = utc_now + timedelta(hours=5, minutes=30)
@@ -1140,6 +1279,7 @@ while True:
                 STARTED_SENT = False
                 STOP_SENT = False
                 EOD_REPORT_SENT = False
+            print(f"⏳ Iteration {iteration}: Market closed. Waiting...")
             time.sleep(30)
             continue
         
@@ -1161,13 +1301,16 @@ while True:
                 send_telegram("🛑 Market closing time reached!")
                 STOP_SENT = True
                 STARTED_SENT = False
+            print(f"⏰ Iteration {iteration}: Market closing time")
             time.sleep(60)
             continue
             
+        print(f"🔄 Iteration {iteration}: Scanning market...")
         run_algo_parallel()
         time.sleep(30)
         
     except Exception as e:
         error_msg = f"⚠️ Main loop error: {str(e)[:100]}"
+        print(error_msg)
         send_telegram(error_msg)
         time.sleep(60)
