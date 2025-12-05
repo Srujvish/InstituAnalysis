@@ -1,13 +1,25 @@
-ta
+# Core Data & Trading
 yfinance
-requests
-pyotp
 pandas
-SmartApi
-logzero
-websocket-client
+numpy
+ta
+
+# Machine Learning
+scikit-learn
+joblib
+
+# API & Brokerage
 smartapi-python
-datetime
+requests
+
+# Security & Authentication
+pyotp
 pycryptodome
+
+# Utilities
+logzero
 multitasking
+websocket-client
+
+# Database (for peewee if using ORM)
 peewee
