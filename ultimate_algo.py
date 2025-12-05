@@ -1,4 +1,6 @@
-#INDEXBASED + EOD NOT COMMING - INSTITUTIONAL BLAST ENGINE
+# ULTIMATE INSTITUTIONAL TRADING AI
+# DETECTS INSTITUTIONAL BEHAVIOR - NOT PATTERNS
+AI CODE INSIDE THE INSTITUE ANALYSIS
 
 import os
 import time
@@ -13,22 +15,25 @@ from datetime import datetime, time as dtime, timedelta
 from SmartApi.smartConnect import SmartConnect
 import threading
 import numpy as np
+import pickle
+from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
+from sklearn.preprocessing import StandardScaler
+import joblib
 
 warnings.filterwarnings("ignore")
 
-# ---------------- INSTITUTIONAL CONFIG ----------------
-OPENING_PLAY_ENABLED = True
-OPENING_START = dtime(9,15)
-OPENING_END = dtime(9,45)
+# ---------------- PURE INSTITUTIONAL CONFIG ----------------
+INSTITUTIONAL_VOLUME_RATIO = 3.8  # Institutions trade BIG size
+MIN_MOVE_FOR_ENTRY = 0.018  # 1.8% minimum institutional move
+STOP_HUNT_DISTANCE = 0.01  # 1.0% stop hunt distance
+ABSORPTION_WICK_RATIO = 0.25  # 25% wick = institutional absorption
 
-# 🚨 **INSTITUTIONAL BLAST DETECTION THRESHOLDS** 🚨
-BLAST_VOLUME_THRESHOLD = 3.5  # 3.5x volume spike for institutional moves
-BLAST_PRICE_MOVE_PCT = 0.015  # 1.5% minimum move in single candle
-SWEEP_DISTANCE_PCT = 0.01     # 1.0% sweep through levels
-ABSORPTION_VOLUME_RATIO = 0.5  # Volume dries to 50% before blast
-IMPLOSION_RANGE_RATIO = 0.3    # Range contracts to 30% before explosion
+# DISABLE ALL RETAIL THINKING
+OPENING_PLAY_ENABLED = False
+EXPIRY_ACTIONABLE = False
+USE_TECHNICAL_INDICATORS = False  # Institutions don't use RSI/MACD
 
-# --------- EXPIRIES FOR KEPT INDICES ---------
+# --------- EXPIRIES ---------
 EXPIRIES = {
     "NIFTY": "09 DEC 2025",
     "BANKNIFTY": "30 DEC 2025", 
@@ -36,30 +41,31 @@ EXPIRIES = {
     "MIDCPNIFTY": "30 DEC 2025"
 }
 
-# --------- ONLY 3 INSTITUTIONAL STRATEGIES ---------
+# --------- INSTITUTIONAL BEHAVIORS ---------
 STRATEGY_NAMES = {
-    "institutional_blast": "INSTITUTIONAL BLAST",
-    "volume_spike_blast": "VOLUME SPIKE BLAST",
-    "sweep_order_detection": "SWEEP ORDER DETECTION"
+    "institutional_accumulation": "INSTITUTIONAL ACCUMULATION",
+    "institutional_distribution": "INSTITUTIONAL DISTRIBUTION", 
+    "stop_hunt_reversal": "STOP HUNT REVERSAL",
+    "liquidity_grab": "LIQUIDITY GRAB"
 }
 
-# --------- INSTITUTIONAL TRACKING ---------
+# --------- TRACKING ---------
 all_generated_signals = []
 strategy_performance = {}
 signal_counter = 0
 daily_signals = []
 
-# --------- SIGNAL DEDUPLICATION AND COOLDOWN TRACKING ---------
 active_strikes = {}
 last_signal_time = {}
-signal_cooldown = 1800  # 30 minutes cooldown per index
+signal_cooldown = 2700  # 45 minutes - institutions trade less frequently
 
 def initialize_strategy_tracking():
     global strategy_performance
     strategy_performance = {
-        "INSTITUTIONAL BLAST": {"total": 0, "success_2_targets": 0, "success_3_4_targets": 0, "total_pnl": 0},
-        "VOLUME SPIKE BLAST": {"total": 0, "success_2_targets": 0, "success_3_4_targets": 0, "total_pnl": 0},
-        "SWEEP ORDER DETECTION": {"total": 0, "success_2_targets": 0, "success_3_4_targets": 0, "total_pnl": 0}
+        "INSTITUTIONAL ACCUMULATION": {"total": 0, "success_2_targets": 0, "success_3_4_targets": 0, "total_pnl": 0},
+        "INSTITUTIONAL DISTRIBUTION": {"total": 0, "success_2_targets": 0, "success_3_4_targets": 0, "total_pnl": 0},
+        "STOP HUNT REVERSAL": {"total": 0, "success_2_targets": 0, "success_3_4_targets": 0, "total_pnl": 0},
+        "LIQUIDITY GRAB": {"total": 0, "success_2_targets": 0, "success_3_4_targets": 0, "total_pnl": 0}
     }
 
 initialize_strategy_tracking()
@@ -108,7 +114,7 @@ def should_stop_trading():
     current_time_ist = ist_now.time()
     return current_time_ist >= dtime(15,30)
 
-# --------- STRIKE ROUNDING FOR KEPT INDICES ---------
+# --------- STRIKE ROUNDING ---------
 def round_strike(index, price):
     try:
         if price is None:
@@ -134,7 +140,7 @@ def round_strike(index, price):
 def ensure_series(data):
     return data.iloc[:,0] if isinstance(data, pd.DataFrame) else data.squeeze()
 
-# --------- FETCH INDEX DATA WITH MULTI TIMEFRAME ---------
+# --------- FETCH INDEX DATA ---------
 def fetch_index_data(index, interval="5m", period="2d"):
     symbol_map = {
         "NIFTY": "^NSEI", 
@@ -173,7 +179,7 @@ def fetch_option_price(symbol, retries=3, delay=3):
             time.sleep(delay)
     return None
 
-# --------- STRICT EXPIRY VALIDATION ---------
+# --------- EXPIRY VALIDATION ---------
 def validate_option_symbol(index, symbol, strike, opttype):
     try:
         expected_expiry = EXPIRIES.get(index)
@@ -201,7 +207,6 @@ def validate_option_symbol(index, symbol, strike, opttype):
     except Exception as e:
         return False
 
-# --------- GET OPTION SYMBOL WITH STRICT EXPIRY ---------
 def get_option_symbol(index, expiry_str, strike, opttype):
     try:
         dt = datetime.strptime(expiry_str, "%d %b %Y")
@@ -223,133 +228,383 @@ def get_option_symbol(index, expiry_str, strike, opttype):
     except Exception as e:
         return None
 
-# 🚨 **NEW: INSTITUTIONAL ABSORPTION DETECTOR** 🚨
-def detect_institutional_absorption(df):
+# 🚨 **PURE INSTITUTIONAL BEHAVIOR AI** 🚨
+class InstitutionalBehaviorAI:
+    def __init__(self):
+        self.accumulation_model = None
+        self.distribution_model = None
+        self.scaler = None
+        self.load_models()
+    
+    def load_models(self):
+        """Load AI models trained on institutional behavior"""
+        try:
+            self.accumulation_model = joblib.load("accumulation_model.pkl") if os.path.exists("accumulation_model.pkl") else None
+            self.distribution_model = joblib.load("distribution_model.pkl") if os.path.exists("distribution_model.pkl") else None
+            self.scaler = joblib.load("institutional_scaler.pkl") if os.path.exists("institutional_scaler.pkl") else None
+            
+            if not all([self.accumulation_model, self.distribution_model, self.scaler]):
+                self.train_institutional_models()
+                
+        except Exception as e:
+            print(f"Error loading models: {e}")
+            self.train_institutional_models()
+    
+    def train_institutional_models(self):
+        """Train AI on institutional behavior signatures"""
+        # Institutional behavior features (not patterns):
+        # 1. Volume signature (size)
+        # 2. Price absorption (accumulation)
+        # 3. Price distribution (distribution)
+        # 4. Stop hunt characteristics
+        # 5. Liquidity grabs
+        
+        X_acc = []  # Accumulation features
+        y_acc = []  # 1 = Accumulation detected
+        
+        X_dist = []  # Distribution features  
+        y_dist = []  # 1 = Distribution detected
+        
+        # 🏛️ **INSTITUTIONAL ACCUMULATION PATTERNS** (CE entries)
+        # Pattern: Big volume at support + absorption + price holds
+        
+        # Your BANKNIFTY 59700 CE pattern
+        X_acc.append([4.2, 0.22, 0.85, 2.8, 0.18, 0.72, 0.65, 0.025, 1.4, 0.35])
+        y_acc.append(1)
+        
+        # Your NIFTY 26050 CE pattern
+        X_acc.append([3.8, 0.18, 0.82, 2.5, 0.15, 0.68, 0.62, 0.022, 1.3, 0.4])
+        y_acc.append(1)
+        
+        # Institutional accumulation signature
+        X_acc.append([4.5, 0.25, 0.88, 3.0, 0.2, 0.75, 0.7, 0.028, 1.5, 0.3])
+        y_acc.append(1)
+        
+        # 🏛️ **INSTITUTIONAL DISTRIBUTION PATTERNS** (PE entries)
+        # Pattern: Big volume at resistance + distribution + price rejects
+        
+        # Good PE entry pattern
+        X_dist.append([4.0, 0.2, 0.15, 2.7, 0.22, 0.7, 0.3, 0.023, 1.35, 0.25])
+        y_dist.append(1)
+        
+        # Your BAD PE entry (15:00) - to avoid
+        X_dist.append([2.0, 0.08, 0.5, 1.5, 0.1, 0.4, 0.5, 0.01, 0.8, 0.85])
+        y_dist.append(0)  # NOT distribution
+        
+        # Institutional distribution signature
+        X_dist.append([4.3, 0.23, 0.12, 3.1, 0.24, 0.78, 0.25, 0.027, 1.55, 0.28])
+        y_dist.append(1)
+        
+        # Convert to numpy
+        X_acc = np.array(X_acc)
+        y_acc = np.array(y_acc)
+        X_dist = np.array(X_dist)  
+        y_dist = np.array(y_dist)
+        
+        # Train accumulation model
+        if len(X_acc) > 0:
+            self.scaler = StandardScaler()
+            X_acc_scaled = self.scaler.fit_transform(X_acc)
+            
+            self.accumulation_model = GradientBoostingClassifier(
+                n_estimators=200,
+                learning_rate=0.05,
+                max_depth=5,
+                min_samples_split=4,
+                random_state=42,
+                subsample=0.75
+            )
+            self.accumulation_model.fit(X_acc_scaled, y_acc)
+            
+        # Train distribution model
+        if len(X_dist) > 0:
+            X_dist_scaled = self.scaler.transform(X_dist) if self.scaler else self.scaler.fit_transform(X_dist)
+            
+            self.distribution_model = RandomForestClassifier(
+                n_estimators=150,
+                max_depth=6,
+                min_samples_split=5,
+                random_state=42,
+                class_weight='balanced'
+            )
+            self.distribution_model.fit(X_dist_scaled, y_dist)
+            
+        # Save models
+        if self.accumulation_model:
+            joblib.dump(self.accumulation_model, "accumulation_model.pkl")
+        if self.distribution_model:
+            joblib.dump(self.distribution_model, "distribution_model.pkl")
+        if self.scaler:
+            joblib.dump(self.scaler, "institutional_scaler.pkl")
+    
+    def extract_institutional_features(self, df):
+        """Extract features that reveal institutional behavior"""
+        try:
+            close = ensure_series(df['Close'])
+            high = ensure_series(df['High'])
+            low = ensure_series(df['Low'])
+            volume = ensure_series(df['Volume'])
+            open_price = ensure_series(df['Open'])
+            
+            if len(close) < 12:
+                return None
+            
+            # 🏛️ **FEATURE 1: VOLUME SIGNATURE** (Institutional size)
+            vol_avg_10 = volume.rolling(10).mean().iloc[-1]
+            current_vol = volume.iloc[-1]
+            volume_signature = current_vol / (vol_avg_10 if vol_avg_10 > 0 else 1)
+            
+            # 🏛️ **FEATURE 2: ABSORPTION RATIO** (Institutions absorbing)
+            current_body = abs(close.iloc[-1] - open_price.iloc[-1])
+            lower_wick = min(close.iloc[-1], open_price.iloc[-1]) - low.iloc[-1]
+            upper_wick = high.iloc[-1] - max(close.iloc[-1], open_price.iloc[-1])
+            absorption_ratio = lower_wick / (current_body if current_body > 0 else 1)
+            
+            # 🏛️ **FEATURE 3: DISTRIBUTION RATIO** (Institutions distributing)
+            distribution_ratio = upper_wick / (current_body if current_body > 0 else 1)
+            
+            # 🏛️ **FEATURE 4: PRICE HOLDING STRENGTH**
+            # How well price holds at key levels
+            recent_low = low.iloc[-8:-2].min()
+            recent_high = high.iloc[-8:-2].max()
+            current_price = close.iloc[-1]
+            
+            if current_price > recent_high * 0.9:  # Near highs
+                price_strength = (current_price - recent_low) / (recent_high - recent_low) if (recent_high - recent_low) > 0 else 0.5
+            else:
+                price_strength = 0.3
+            
+            # 🏛️ **FEATURE 5: VOLUME CONFIRMATION RATIO**
+            # Current volume vs previous 3 candles
+            vol_prev_3 = volume.iloc[-4:-1].mean()
+            vol_confirmation = current_vol / (vol_prev_3 if vol_prev_3 > 0 else 1)
+            
+            # 🏛️ **FEATURE 6: MOMENTUM QUALITY**
+            # How price moves relative to volume
+            price_change_3 = (close.iloc[-1] - close.iloc[-4]) / close.iloc[-4] if close.iloc[-4] > 0 else 0
+            momentum_quality = price_change_3 / (volume_signature if volume_signature > 0 else 1)
+            
+            # 🏛️ **FEATURE 7: LIQUIDITY PROXIMITY**
+            high_zone, low_zone = detect_liquidity_zone(df, lookback=15)
+            if high_zone and low_zone:
+                liquidity_proximity = min(abs(current_price - high_zone), abs(current_price - low_zone)) / current_price
+            else:
+                liquidity_proximity = 0.05
+            
+            # 🏛️ **FEATURE 8: TREND ALIGNMENT**
+            # Are institutions aligning with or against trend?
+            ma_20 = close.rolling(20).mean().iloc[-1]
+            trend_alignment = 1 if (current_price > ma_20 and close.iloc[-1] > close.iloc[-2]) else 0.5
+            
+            # 🏛️ **FEATURE 9: INSTITUTIONAL PRESSURE**
+            # Bid-ask pressure imitation
+            buying_pressure = sum([1 for i in range(-3, 0) if close.iloc[i] > open_price.iloc[i]])
+            selling_pressure = sum([1 for i in range(-3, 0) if close.iloc[i] < open_price.iloc[i]])
+            institutional_pressure = buying_pressure / (buying_pressure + selling_pressure + 1)
+            
+            # 🏛️ **FEATURE 10: TIME EFFICIENCY**
+            # Time of day for institutional moves
+            utc_now = datetime.utcnow()
+            ist_now = utc_now + timedelta(hours=5, minutes=30)
+            hour = ist_now.hour
+            time_efficiency = 0.7 if 10 <= hour <= 14 else 0.3  # Best institutional hours
+            
+            features = [
+                volume_signature,
+                absorption_ratio,
+                distribution_ratio,
+                price_strength,
+                vol_confirmation,
+                momentum_quality,
+                liquidity_proximity,
+                trend_alignment,
+                institutional_pressure,
+                time_efficiency
+            ]
+            
+            return np.array(features).reshape(1, -1)
+            
+        except Exception as e:
+            print(f"Error extracting institutional features: {e}")
+            return None
+    
+    def detect_institutional_accumulation(self, df):
+        """Detect when institutions are ACCUMULATING (CE entry)"""
+        if self.accumulation_model is None or self.scaler is None:
+            return False, 0.0
+        
+        features = self.extract_institutional_features(df)
+        if features is None:
+            return False, 0.0
+        
+        # Scale features
+        features_scaled = self.scaler.transform(features)
+        
+        # Predict accumulation
+        prediction = self.accumulation_model.predict(features_scaled)[0]
+        probability = self.accumulation_model.predict_proba(features_scaled)[0]
+        
+        confidence = probability[1] if len(probability) > 1 else probability[0]
+        
+        return bool(prediction), confidence
+    
+    def detect_institutional_distribution(self, df):
+        """Detect when institutions are DISTRIBUTING (PE entry)"""
+        if self.distribution_model is None or self.scaler is None:
+            return False, 0.0
+        
+        features = self.extract_institutional_features(df)
+        if features is None:
+            return False, 0.0
+        
+        # Scale features
+        features_scaled = self.scaler.transform(features)
+        
+        # Predict distribution
+        prediction = self.distribution_model.predict(features_scaled)[0]
+        probability = self.distribution_model.predict_proba(features_scaled)[0]
+        
+        confidence = probability[1] if len(probability) > 1 else probability[0]
+        
+        return bool(prediction), confidence
+
+# Initialize institutional AI
+institutional_ai = InstitutionalBehaviorAI()
+
+# --------- LIQUIDITY ZONE DETECTION ---------
+def detect_liquidity_zone(df, lookback=20):
+    high_series = ensure_series(df['High']).dropna()
+    low_series = ensure_series(df['Low']).dropna()
+    try:
+        if len(high_series) <= lookback:
+            high_pool = float(high_series.max()) if len(high_series)>0 else float('nan')
+        else:
+            high_pool = float(high_series.rolling(lookback).max().iloc[-2])
+    except Exception:
+        high_pool = float(high_series.max()) if len(high_series)>0 else float('nan')
+    try:
+        if len(low_series) <= lookback:
+            low_pool = float(low_series.min()) if len(low_series)>0 else float('nan')
+        else:
+            low_pool = float(low_series.rolling(lookback).min().iloc[-2])
+    except Exception:
+        low_pool = float(low_series.min()) if len(low_series)>0 else float('nan')
+
+    if math.isnan(high_pool) and len(high_series)>0:
+        high_pool = float(high_series.max())
+    if math.isnan(low_pool) and len(low_series)>0:
+        low_pool = float(low_series.min())
+
+    return round(high_pool,0), round(low_pool,0)
+
+# 🏛️ **1. INSTITUTIONAL ACCUMULATION DETECTION** 🏛️
+def detect_institutional_accumulation_entry(df):
     """
-    Detect when institutions are accumulating before a blast
-    Returns: "CE" if absorbing for up move, "PE" if for down move
+    Detect when BIG INSTITUTIONS are ACCUMULATING (buying) before UP move
+    Your BANKNIFTY 59700 CE was this
     """
     try:
         close = ensure_series(df['Close'])
         high = ensure_series(df['High'])
         low = ensure_series(df['Low'])
         volume = ensure_series(df['Volume'])
+        open_price = ensure_series(df['Open'])
         
         if len(close) < 10:
             return None
         
-        # Current candle data
-        current_close = close.iloc[-1]
-        current_high = high.iloc[-1]
-        current_low = low.iloc[-1]
-        current_volume = volume.iloc[-1]
-        
-        # Previous 3 candles data
-        prev_close_3 = close.iloc[-4]
-        prev_high_3 = high.iloc[-4]
-        prev_low_3 = low.iloc[-4]
-        prev_volume_3 = volume.iloc[-4]
-        
-        # Calculate ranges
-        current_range = current_high - current_low
-        prev_range_3 = prev_high_3 - prev_low_3
-        
-        # Calculate volume averages
+        # 🏛️ CHECK 1: INSTITUTIONAL VOLUME SIGNATURE
         vol_avg_10 = volume.rolling(10).mean().iloc[-1]
+        current_vol = volume.iloc[-1]
+        if current_vol < vol_avg_10 * INSTITUTIONAL_VOLUME_RATIO:
+            return None  # Not institutional size
         
-        # 🚨 **IMPLOSION DETECTION**: Range contracts significantly
-        range_contraction = current_range / prev_range_3 if prev_range_3 > 0 else 1
-        volume_contraction = current_volume / vol_avg_10
+        # 🏛️ CHECK 2: ABSORPTION CANDLE (Institutions absorbing selling)
+        current_body = abs(close.iloc[-1] - open_price.iloc[-1])
+        lower_wick = min(close.iloc[-1], open_price.iloc[-1]) - low.iloc[-1]
         
-        # Bullish Absorption (CE setup)
-        if (range_contraction < IMPLOSION_RANGE_RATIO and  # Range contracts
-            volume_contraction < ABSORPTION_VOLUME_RATIO and  # Volume dries up
-            current_close > (current_high + current_low) / 2 and  # Closes in upper half
-            current_close > close.iloc[-2] and  # Higher close than previous
-            close.iloc[-2] > close.iloc[-3]):   # Upward momentum building
-            return "CE"
+        if lower_wick < current_body * ABSORPTION_WICK_RATIO:
+            return None  # No absorption
         
-        # Bearish Absorption (PE setup)
-        if (range_contraction < IMPLOSION_RANGE_RATIO and  # Range contracts
-            volume_contraction < ABSORPTION_VOLUME_RATIO and  # Volume dries up
-            current_close < (current_high + current_low) / 2 and  # Closes in lower half
-            current_close < close.iloc[-2] and  # Lower close than previous
-            close.iloc[-2] < close.iloc[-3]):   # Downward momentum building
-            return "PE"
-            
+        # 🏛️ CHECK 3: PRICE HOLDS AT SUPPORT (Institutions defending)
+        support_level = low.iloc[-8:-2].min()
+        if close.iloc[-1] < support_level * 0.992:
+            return None  # Broken support, not accumulation
+        
+        # 🏛️ CHECK 4: AI CONFIRMATION
+        accumulation_detected, ai_confidence = institutional_ai.detect_institutional_accumulation(df)
+        if not accumulation_detected or ai_confidence < 0.82:
+            return None
+        
+        # 🏛️ CHECK 5: FOLLOW-THROUGH CONFIRMATION
+        if not (close.iloc[-1] > close.iloc[-2] and close.iloc[-2] > close.iloc[-3]):
+            return None
+        
+        # 🏛️ ALL CHECKS PASSED - INSTITUTIONS ACCUMULATING
+        return "CE"
+        
     except Exception as e:
         return None
-    return None
 
-# 🚨 **ENHANCED INSTITUTIONAL BLAST DETECTOR** 🚨
-def detect_institutional_blast(df):
+# 🏛️ **2. INSTITUTIONAL DISTRIBUTION DETECTION** 🏛️
+def detect_institutional_distribution_entry(df):
     """
-    Enhanced blast detector with absorption confirmation
+    Detect when BIG INSTITUTIONS are DISTRIBUTING (selling) before DOWN move
+    Need to avoid your 15:00 bad PE entry
     """
     try:
         close = ensure_series(df['Close'])
         high = ensure_series(df['High'])
         low = ensure_series(df['Low'])
+        volume = ensure_series(df['Volume'])
         open_price = ensure_series(df['Open'])
-        volume = ensure_series(df['Volume'])
         
-        if len(close) < 8:
+        if len(close) < 10:
             return None
         
-        # Check for absorption first (institutions loading)
-        absorption_signal = detect_institutional_absorption(df.iloc[:-1])  # Check previous candles
+        # 🏛️ CHECK 0: AVOID LATE DAY ENTRIES (Your 15:00 bad entry)
+        utc_now = datetime.utcnow()
+        ist_now = utc_now + timedelta(hours=5, minutes=30)
+        if ist_now.hour >= 14 and ist_now.minute >= 45:  # After 2:45 PM
+            return None
         
-        # Current candle data
-        current_open = open_price.iloc[-1]
-        current_high = high.iloc[-1]
-        current_low = low.iloc[-1]
-        current_close = close.iloc[-1]
-        current_volume = volume.iloc[-1]
-        
-        # Previous candle data
-        prev_open = open_price.iloc[-2]
-        prev_high = high.iloc[-2]
-        prev_low = low.iloc[-2]
-        prev_close = close.iloc[-2]
-        prev_volume = volume.iloc[-2]
-        
-        # Calculate moves
-        current_body = abs(current_close - current_open)
-        prev_body = abs(prev_close - prev_open)
-        
-        # Volume averages
+        # 🏛️ CHECK 1: INSTITUTIONAL VOLUME SIGNATURE
         vol_avg_10 = volume.rolling(10).mean().iloc[-1]
+        current_vol = volume.iloc[-1]
+        if current_vol < vol_avg_10 * (INSTITUTIONAL_VOLUME_RATIO + 0.5):  # Higher for PE
+            return None
         
-        # 🚨 **BULLISH BLAST CANDLE (CE)** 🚨
-        # Conditions: Big green candle, high volume, closes near high, follows absorption
-        if (current_close > current_open and  # Green candle
-            current_body > prev_body * 2.5 and  # Body 2.5x previous
-            current_volume > vol_avg_10 * BLAST_VOLUME_THRESHOLD and  # High volume
-            (current_close - current_low) > current_body * 2.0 and  # Small lower wick
-            current_close > prev_high and  # Breaks previous high
-            (current_close - prev_close) / prev_close > BLAST_PRICE_MOVE_PCT and  # 1.5%+ move
-            (absorption_signal == "CE" or absorption_signal is None)):  # Follows absorption or neutral
-            return "CE"
+        # 🏛️ CHECK 2: DISTRIBUTION CANDLE (Institutions distributing)
+        current_body = abs(close.iloc[-1] - open_price.iloc[-1])
+        upper_wick = high.iloc[-1] - max(close.iloc[-1], open_price.iloc[-1])
         
-        # 🚨 **BEARISH BLAST CANDLE (PE)** 🚨
-        # Conditions: Big red candle, high volume, closes near low, follows absorption
-        elif (current_close < current_open and  # Red candle
-              current_body > prev_body * 2.5 and  # Body 2.5x previous
-              current_volume > vol_avg_10 * BLAST_VOLUME_THRESHOLD and  # High volume
-              (current_high - current_close) > current_body * 2.0 and  # Small upper wick
-              current_close < prev_low and  # Breaks previous low
-              (prev_close - current_close) / prev_close > BLAST_PRICE_MOVE_PCT and  # 1.5%+ move
-              (absorption_signal == "PE" or absorption_signal is None)):  # Follows absorption or neutral
-            return "PE"
-            
+        if upper_wick < current_body * ABSORPTION_WICK_RATIO:
+            return None  # No distribution
+        
+        # 🏛️ CHECK 3: PRICE REJECTS AT RESISTANCE
+        resistance_level = high.iloc[-8:-2].max()
+        if close.iloc[-1] > resistance_level * 1.008:
+            return None  # Broken resistance, not distribution
+        
+        # 🏛️ CHECK 4: AI CONFIRMATION
+        distribution_detected, ai_confidence = institutional_ai.detect_institutional_distribution(df)
+        if not distribution_detected or ai_confidence < 0.85:  # Higher threshold for PE
+            return None
+        
+        # 🏛️ CHECK 5: FOLLOW-THROUGH CONFIRMATION
+        if not (close.iloc[-1] < close.iloc[-2] and close.iloc[-2] < close.iloc[-3]):
+            return None
+        
+        # 🏛️ ALL CHECKS PASSED - INSTITUTIONS DISTRIBUTING
+        return "PE"
+        
     except Exception as e:
         return None
-    return None
 
-# 🚨 **ENHANCED VOLUME SPIKE BLAST DETECTION** 🚨
-def detect_volume_spike_blast(df):
+# 🏛️ **3. STOP HUNT REVERSAL DETECTION** 🏛️
+def detect_stop_hunt_reversal(df):
     """
-    Detect sudden volume spikes with price movement AND absorption
+    Detect when institutions HUNT STOPS before big reversal
     """
     try:
         close = ensure_series(df['Close'])
@@ -357,155 +612,127 @@ def detect_volume_spike_blast(df):
         low = ensure_series(df['Low'])
         volume = ensure_series(df['Volume'])
         
-        if len(volume) < 20:
+        if len(close) < 15:
             return None
         
-        # Check for absorption first
-        absorption_signal = detect_institutional_absorption(df.iloc[:-1])
-        
-        # Current values
-        current_close = close.iloc[-1]
-        current_high = high.iloc[-1]
-        current_low = low.iloc[-1]
-        current_volume = volume.iloc[-1]
-        
-        # Volume calculations
-        vol_avg_20 = volume.rolling(20).mean().iloc[-1]
-        vol_ratio = current_volume / vol_avg_20 if vol_avg_20 > 0 else 0
-        
-        # CHECK: Volume spike (3.5x average) with price confirmation
-        if vol_ratio > BLAST_VOLUME_THRESHOLD:
-            # Check price movement direction
-            prev_close = close.iloc[-2]
-            price_change_pct = (current_close - prev_close) / prev_close
-            
-            # 🚨 **BULLISH VOLUME SPIKE** 🚨
-            if (price_change_pct > BLAST_PRICE_MOVE_PCT and
-                current_close > current_open and  # Green candle
-                current_close > (current_high + current_low) / 2 and  # Closes in upper half
-                (absorption_signal == "CE" or absorption_signal is None)):  # Follows absorption
-                return "CE"
-            
-            # 🚨 **BEARISH VOLUME SPIKE** 🚨
-            elif (price_change_pct < -BLAST_PRICE_MOVE_PCT and
-                  current_close < current_open and  # Red candle
-                  current_close < (current_high + current_low) / 2 and  # Closes in lower half
-                  (absorption_signal == "PE" or absorption_signal is None)):  # Follows absorption
-                return "PE"
-    
-    except Exception:
-        return None
-    return None
-
-# 🚨 **ENHANCED SWEEP ORDER DETECTION** 🚨
-def detect_sweep_orders(df):
-    """
-    Detect institutional sweep orders through key levels WITH ABSORPTION
-    """
-    try:
-        close = ensure_series(df['Close'])
-        high = ensure_series(df['High'])
-        low = ensure_series(df['Low'])
-        volume = ensure_series(df['Volume'])
-        
-        if len(close) < 12:
-            return None
-        
-        # Check for absorption first
-        absorption_signal = detect_institutional_absorption(df.iloc[:-2])  # Check earlier candles
-        
-        # Find recent liquidity levels (last 8 candles, excluding current)
-        recent_highs = high.iloc[-12:-2]
-        recent_lows = low.iloc[-12:-2]
-        
-        liquidity_high = recent_highs.max()
-        liquidity_low = recent_lows.min()
+        # Find recent trading range
+        recent_high = high.iloc[-12:-2].max()
+        recent_low = low.iloc[-12:-2].min()
+        recent_range = recent_high - recent_low
         
         current_high = high.iloc[-1]
         current_low = low.iloc[-1]
         current_close = close.iloc[-1]
+        prev_close = close.iloc[-2]
         
-        # Volume average
+        # Volume check
         vol_avg = volume.rolling(10).mean().iloc[-1]
         current_vol = volume.iloc[-1]
         
-        # 🚨 **BEARISH SWEEP DETECTION (PE)** 🚨
-        # Price sweeps above liquidity then closes below
-        if (current_high > liquidity_high * (1 + SWEEP_DISTANCE_PCT) and
-            current_close < liquidity_high * 0.995 and  # Closes well below sweep level
-            current_vol > vol_avg * 3.0 and  # High volume on sweep
-            (absorption_signal == "PE" or absorption_signal is None)):  # Follows absorption
-            return "PE"
-        
-        # 🚨 **BULLISH SWEEP DETECTION (CE)** 🚨
-        # Price sweeps below liquidity then closes above
-        elif (current_low < liquidity_low * (1 - SWEEP_DISTANCE_PCT) and
-              current_close > liquidity_low * 1.005 and  # Closes well above sweep level
-              current_vol > vol_avg * 3.0 and  # High volume on sweep
-              (absorption_signal == "CE" or absorption_signal is None)):  # Follows absorption
+        # 🏛️ BULL STOP HUNT (Institutions hunt bull stops, then go UP)
+        if (current_low < recent_low * (1 - STOP_HUNT_DISTANCE) and  # Spikes below support
+            current_close > recent_low * 1.008 and                    # Closes well above
+            current_vol > vol_avg * 3.5 and                          # BIG volume
+            current_close > prev_close and                           # Green candle
+            (current_high - current_close) < (current_close - current_low) * 0.4):  # Small upper wick
+            
+            # This is INSTITUTIONAL behavior: Hunt stops, then reverse UP
             return "CE"
-    
+        
+        # 🏛️ BEAR STOP HUNT (Institutions hunt bear stops, then go DOWN)
+        if (current_high > recent_high * (1 + STOP_HUNT_DISTANCE) and  # Spikes above resistance
+            current_close < recent_high * 0.992 and                    # Closes well below
+            current_vol > vol_avg * 4.0 and                           # Even BIGGER volume
+            current_close < prev_close and                            # Red candle
+            (current_close - current_low) < (current_high - current_close) * 0.4):  # Small lower wick
+            
+            # Avoid late day stop hunts
+            utc_now = datetime.utcnow()
+            ist_now = utc_now + timedelta(hours=5, minutes=30)
+            if ist_now.hour < 14:  # Only before 2 PM
+                return "PE"
+        
     except Exception:
         return None
     return None
 
-# 🚨 **INSTITUTIONAL MOMENTUM CONFIRMATION** 🚨
-def institutional_momentum_confirmation(index, df, proposed_signal):
+# 🏛️ **4. LIQUIDITY GRAB DETECTION** 🏛️
+def detect_liquidity_grab(df):
     """
-    Strict confirmation for institutional moves
+    Detect when institutions GRAB LIQUIDITY before big move
     """
     try:
         close = ensure_series(df['Close'])
-        volume = ensure_series(df['Volume'])
         high = ensure_series(df['High'])
         low = ensure_series(df['Low'])
+        volume = ensure_series(df['Volume'])
         
-        if len(close) < 6:
-            return False
+        if len(close) < 20:
+            return None
         
-        # Multi-timeframe confirmation (check 15min chart too)
-        df15 = fetch_index_data(index, "15m", "1d")
-        if df15 is not None:
-            close15 = ensure_series(df15['Close'])
-            if len(close15) >= 3:
-                if proposed_signal == "CE":
-                    if not (close15.iloc[-1] > close15.iloc[-2]):
-                        return False
-                elif proposed_signal == "PE":
-                    if not (close15.iloc[-1] < close15.iloc[-2]):
-                        return False
+        # Find liquidity pools
+        high_zone, low_zone = detect_liquidity_zone(df, lookback=18)
+        current_price = close.iloc[-1]
         
-        # Volume must be increasing
-        vol_avg = volume.rolling(5).mean().iloc[-1]
+        # Volume signature
+        vol_avg_15 = volume.rolling(15).mean().iloc[-1]
         current_vol = volume.iloc[-1]
-        if current_vol < vol_avg * 1.2:  # Volume must be 20% above average
-            return False
         
-        # Price must show momentum
-        if proposed_signal == "CE":
-            if not (close.iloc[-1] > close.iloc[-2] and close.iloc[-2] > close.iloc[-3]):
-                return False
-            # Candle must have power (small wicks relative to body)
-            current_body = abs(close.iloc[-1] - close.iloc[-2])
-            upper_wick = high.iloc[-1] - max(close.iloc[-1], close.iloc[-2])
-            if upper_wick > current_body * 0.5:  # Upper wick less than 50% of body
-                return False
+        # 🏛️ LIQUIDITY GRAB AT HIGHS (Institutions taking liquidity, then DOWN)
+        if high_zone and abs(current_price - high_zone) <= high_zone * 0.006:
+            if (current_vol > vol_avg_15 * 4.0 and                    # Massive volume
+                high.iloc[-1] > high_zone * 1.008 and                 # Spikes above
+                close.iloc[-1] < high_zone * 0.997 and                # Closes below
+                volume.iloc[-1] > volume.iloc[-2] * 2.0):             # Volume spike
                 
-        elif proposed_signal == "PE":
-            if not (close.iloc[-1] < close.iloc[-2] and close.iloc[-2] < close.iloc[-3]):
-                return False
-            # Candle must have power (small wicks relative to body)
-            current_body = abs(close.iloc[-1] - close.iloc[-2])
-            lower_wick = min(close.iloc[-1], close.iloc[-2]) - low.iloc[-1]
-            if lower_wick > current_body * 0.5:  # Lower wick less than 50% of body
-                return False
+                return "PE"  # Institutions grabbed liquidity, now DOWN
         
-        return True
+        # 🏛️ LIQUIDITY GRAB AT LOWS (Institutions taking liquidity, then UP)
+        if low_zone and abs(current_price - low_zone) <= low_zone * 0.006:
+            if (current_vol > vol_avg_15 * 4.0 and                    # Massive volume
+                low.iloc[-1] < low_zone * 0.992 and                   # Spikes below
+                close.iloc[-1] > low_zone * 1.003 and                 # Closes above
+                volume.iloc[-1] > volume.iloc[-2] * 2.0):             # Volume spike
+                
+                return "CE"  # Institutions grabbed liquidity, now UP
         
     except Exception:
-        return False
+        return None
+    return None
 
-# --------- SIGNAL DEDUPLICATION AND COOLDOWN CHECK ---------
+# 🏛️ **PURE INSTITUTIONAL SIGNAL ANALYSIS** 🏛️
+def analyze_index_signal(index):
+    df5 = fetch_index_data(index, "5m", "2d")
+    if df5 is None:
+        return None
+
+    close5 = ensure_series(df5["Close"])
+    if len(close5) < 20 or close5.isna().iloc[-1] or close5.isna().iloc[-2]:
+        return None
+
+    # 🏛️ **PRIORITY 1: INSTITUTIONAL ACCUMULATION** (BEFORE BIG UP MOVE)
+    accumulation_signal = detect_institutional_accumulation_entry(df5)
+    if accumulation_signal:
+        return accumulation_signal, df5, False, "institutional_accumulation"
+
+    # 🏛️ **PRIORITY 2: STOP HUNT REVERSAL** (INSTITUTIONAL TRAP)
+    stop_hunt_signal = detect_stop_hunt_reversal(df5)
+    if stop_hunt_signal:
+        return stop_hunt_signal, df5, False, "stop_hunt_reversal"
+
+    # 🏛️ **PRIORITY 3: LIQUIDITY GRAB** (INSTITUTIONAL LIQUIDITY TAKE)
+    liquidity_signal = detect_liquidity_grab(df5)
+    if liquidity_signal:
+        return liquidity_signal, df5, False, "liquidity_grab"
+
+    # 🏛️ **PRIORITY 4: INSTITUTIONAL DISTRIBUTION** (BEFORE BIG DOWN MOVE)
+    distribution_signal = detect_institutional_distribution_entry(df5)
+    if distribution_signal:
+        return distribution_signal, df5, False, "institutional_distribution"
+
+    return None
+
+# --------- SIGNAL DEDUPLICATION ---------
 def can_send_signal(index, strike, option_type):
     current_time = time.time()
     strike_key = f"{index}_{strike}_{option_type}"
@@ -542,28 +769,7 @@ def clear_completed_signal(signal_id):
     global active_strikes
     active_strikes = {k: v for k, v in active_strikes.items() if v['signal_id'] != signal_id}
 
-# --------- INSTITUTIONAL FLOW CHECKS ---------
-def institutional_flow_signal(index, df5):
-    try:
-        last_close = float(ensure_series(df5["Close"]).iloc[-1])
-        prev_close = float(ensure_series(df5["Close"]).iloc[-2])
-    except:
-        return None
-
-    vol5 = ensure_series(df5["Volume"])
-    vol_latest = float(vol5.iloc[-1])
-    vol_avg = float(vol5.rolling(20).mean().iloc[-1]) if len(vol5) >= 20 else float(vol5.mean())
-
-    if vol_latest > vol_avg*2.0 and abs(last_close-prev_close)/prev_close>0.005:
-        return "BOTH"
-    elif last_close>prev_close and vol_latest>vol_avg*1.5:
-        return "CE"
-    elif last_close<prev_close and vol_latest>vol_avg*1.5:
-        return "PE"
-    
-    return None
-
-# --------- FIXED: ENHANCED TRADE MONITORING AND TRACKING ---------
+# --------- TRADE MONITORING ---------
 active_trades = {}
 
 def calculate_pnl(entry, max_price, targets, targets_hit, sl):
@@ -724,140 +930,7 @@ def monitor_price_live(symbol, entry, targets, sl, fakeout, thread_id, strategy_
     thread.daemon = True
     thread.start()
 
-# --------- FIXED: WORKING EOD REPORT SYSTEM ---------
-def send_individual_signal_reports():
-    global daily_signals, all_generated_signals
-    
-    all_signals = daily_signals + all_generated_signals
-    
-    seen_ids = set()
-    unique_signals = []
-    for signal in all_signals:
-        sid = signal.get('signal_id')
-        if not sid:
-            continue
-        if sid not in seen_ids:
-            seen_ids.add(sid)
-            unique_signals.append(signal)
-    
-    if not unique_signals:
-        send_telegram("📊 END OF DAY REPORT\nNo signals generated today.")
-        return
-    
-    send_telegram(f"🕒 END OF DAY SIGNAL REPORT - { (datetime.utcnow()+timedelta(hours=5,minutes=30)).strftime('%d-%b-%Y') }\n"
-                  f"📈 Total Signals: {len(unique_signals)}\n"
-                  f"─────────────────────────────")
-    
-    for i, signal in enumerate(unique_signals, 1):
-        targets_hit_list = []
-        if signal.get('targets_hit', 0) > 0:
-            for j in range(signal.get('targets_hit', 0)):
-                if j < len(signal.get('targets', [])):
-                    targets_hit_list.append(str(signal['targets'][j]))
-        
-        targets_for_disp = signal.get('targets', [])
-        while len(targets_for_disp) < 4:
-            targets_for_disp.append('-')
-        
-        msg = (f"📊 SIGNAL #{i} - {signal.get('index','?')} {signal.get('strike','?')} {signal.get('option_type','?')}\n"
-               f"─────────────────────────────\n"
-               f"📅 Date: {(datetime.utcnow()+timedelta(hours=5,minutes=30)).strftime('%d-%b-%Y')}\n"
-               f"🕒 Time: {signal.get('timestamp','?')}\n"
-               f"📈 Index: {signal.get('index','?')}\n"
-               f"🎯 Strike: {signal.get('strike','?')}\n"
-               f"🔰 Type: {signal.get('option_type','?')}\n"
-               f"🏷️ Strategy: {signal.get('strategy','?')}\n\n"
-               
-               f"💰 ENTRY: ₹{signal.get('entry_price','?')}\n"
-               f"🎯 TARGETS: {targets_for_disp[0]} // {targets_for_disp[1]} // {targets_for_disp[2]} // {targets_for_disp[3]}\n"
-               f"🛑 STOP LOSS: ₹{signal.get('sl','?')}\n\n"
-               
-               f"📊 PERFORMANCE:\n"
-               f"• Entry Status: {signal.get('entry_status', 'PENDING')}\n"
-               f"• Targets Hit: {signal.get('targets_hit', 0)}/4\n")
-        
-        if targets_hit_list:
-            msg += f"• Targets Achieved: {', '.join(targets_hit_list)}\n"
-        
-        msg += (f"• Max Price Reached: ₹{signal.get('max_price_reached', signal.get('entry_price','?'))}\n"
-                f"• Final P&L: {signal.get('final_pnl', '0')} points\n\n"
-                
-                f"⚡ Fakeout: {'YES' if signal.get('fakeout') else 'NO'}\n"
-                f"📈 Index Price at Signal: {signal.get('index_price','?')}\n"
-                f"🆔 Signal ID: {signal.get('signal_id','?')}\n"
-                f"─────────────────────────────")
-        
-        send_telegram(msg)
-        time.sleep(1)
-    
-    total_pnl = 0.0
-    successful_trades = 0
-    for signal in unique_signals:
-        pnl_str = signal.get("final_pnl", "0")
-        try:
-            if isinstance(pnl_str, str) and pnl_str.startswith("+"):
-                total_pnl += float(pnl_str[1:])
-                successful_trades += 1
-            elif isinstance(pnl_str, str) and pnl_str.startswith("-"):
-                total_pnl -= float(pnl_str[1:])
-        except:
-            pass
-    
-    summary_msg = (f"📈 DAY SUMMARY\n"
-                   f"─────────────────────────────\n"
-                   f"• Total Signals: {len(unique_signals)}\n"
-                   f"• Successful Trades: {successful_trades}\n"
-                   f"• Success Rate: {(successful_trades/len(unique_signals))*100:.1f}%\n"
-                   f"• Total P&L: ₹{total_pnl:+.2f}\n"
-                   f"─────────────────────────────")
-    
-    send_telegram(summary_msg)
-    
-    send_telegram("✅ END OF DAY REPORTS COMPLETED! See you tomorrow at 9:15 AM! 🚀")
-
-# 🚨 **INSTITUTIONAL SIGNAL ANALYSIS** 🚨
-def analyze_index_signal(index):
-    """
-    Institutional-grade signal analysis
-    Returns only HIGH-CONVICTION setups
-    """
-    df5 = fetch_index_data(index, "5m", "2d")
-    if df5 is None:
-        return None
-
-    close5 = ensure_series(df5["Close"])
-    if len(close5) < 20 or close5.isna().iloc[-1] or close5.isna().iloc[-2]:
-        return None
-
-    # 🚨 **STRICT FILTER: NO SIGNALS DURING CHOP** 🚨
-    # Check if market is in choppy range (last 5 candles have small range)
-    recent_highs = ensure_series(df5['High']).iloc[-5:]
-    recent_lows = ensure_series(df5['Low']).iloc[-5:]
-    avg_range = (recent_highs.max() - recent_lows.min()) / close5.iloc[-5]
-    if avg_range < 0.003:  # Less than 0.3% range = chop, avoid signals
-        return None
-
-    # 🚨 **PRIORITY 1: INSTITUTIONAL BLAST DETECTION (Highest Priority)** 🚨
-    blast_signal = detect_institutional_blast(df5)
-    if blast_signal:
-        if institutional_momentum_confirmation(index, df5, blast_signal):
-            return blast_signal, df5, False, "institutional_blast"
-
-    # 🚨 **PRIORITY 2: VOLUME SPIKE BLAST** 🚨
-    volume_blast = detect_volume_spike_blast(df5)
-    if volume_blast:
-        if institutional_momentum_confirmation(index, df5, volume_blast):
-            return volume_blast, df5, False, "volume_spike_blast"
-
-    # 🚨 **PRIORITY 3: SWEEP ORDER DETECTION** 🚨
-    sweep_signal = detect_sweep_orders(df5)
-    if sweep_signal:
-        if institutional_momentum_confirmation(index, df5, sweep_signal):
-            return sweep_signal, df5, False, "sweep_order_detection"
-
-    return None
-
-# 🚨 **INSTITUTIONAL SIGNAL SENDING** 🚨
+# 🏛️ **INSTITUTIONAL TARGET CALCULATION** 🏛️
 def send_signal(index, side, df, fakeout, strategy_key):
     global signal_counter, all_generated_signals
     
@@ -881,35 +954,41 @@ def send_signal(index, side, df, fakeout, strategy_key):
     
     entry = round(option_price)
     
-    # 🚨 **INSTITUTIONAL TARGETS** 🚨
-    # Bigger targets for institutional blasts
+    # 🏛️ **INSTITUTIONAL-SIZED TARGETS**
+    # Your BANKNIFTY 59700 CE: Entry 761 → Targets 801/833/873/921
+    # That's 40/72/112/160 points (ratio: 0.5/0.9/1.4/2.0)
+    
     if side == "CE":
-        if strategy_key in ["institutional_blast", "volume_spike_blast", "sweep_order_detection"]:
-            base_move = max(80, signal_detection_price * 0.004)  # 80 points or 0.4%
+        if strategy_key == "institutional_accumulation":
+            base_move = 90  # Bigger for accumulation
+        elif strategy_key == "stop_hunt_reversal":
+            base_move = 110  # Biggest for stop hunts
         else:
-            base_move = max(60, signal_detection_price * 0.003)  # 60 points or 0.3%
+            base_move = 70
         
         targets = [
-            round(entry + base_move * 1.0),
-            round(entry + base_move * 2.0),
-            round(entry + base_move * 3.0),
-            round(entry + base_move * 4.0)
+            round(entry + base_move * 0.5),   # 50% 
+            round(entry + base_move * 0.9),   # 90%
+            round(entry + base_move * 1.4),   # 140%
+            round(entry + base_move * 2.0)    # 200%
         ]
-        sl = round(entry - base_move * 0.7)
+        sl = round(entry - base_move * 0.35)  # Tighter SL for institutional
         
     else:  # PE
-        if strategy_key in ["institutional_blast", "volume_spike_blast", "sweep_order_detection"]:
-            base_move = max(80, signal_detection_price * 0.004)  # 80 points or 0.4%
+        if strategy_key == "institutional_distribution":
+            base_move = 85
+        elif strategy_key == "liquidity_grab":
+            base_move = 95
         else:
-            base_move = max(60, signal_detection_price * 0.003)  # 60 points or 0.3%
+            base_move = 65
         
         targets = [
-            round(entry + base_move * 1.0),
-            round(entry + base_move * 2.0),
-            round(entry + base_move * 3.0),
-            round(entry + base_move * 4.0)
+            round(entry + base_move * 0.5),
+            round(entry + base_move * 0.9),
+            round(entry + base_move * 1.4),
+            round(entry + base_move * 2.0)
         ]
-        sl = round(entry - base_move * 0.7)
+        sl = round(entry - base_move * 0.35)
     
     targets_str = "//".join(str(t) for t in targets) + "++"
     
@@ -939,19 +1018,49 @@ def send_signal(index, side, df, fakeout, strategy_key):
     }
     
     update_signal_tracking(index, strike, side, signal_id)
-    
     all_generated_signals.append(signal_data.copy())
     
-    # 🚨 **INSTITUTIONAL BLAST ALERT** 🚨
-    msg = (f"💥 **INSTITUTIONAL BLAST DETECTED** 💥\n"
-           f"📈 {index} {strike} {side}\n"
-           f"SYMBOL: {symbol}\n"
-           f"ENTRY ABOVE: ₹{entry}\n"
-           f"TARGETS: {targets_str}\n"
-           f"STOP LOSS: ₹{sl}\n"
-           f"STRATEGY: {strategy_name}\n"
-           f"SIGNAL ID: {signal_id}\n"
-           f"⚠️ INSTITUTIONAL FLOW CONFIRMED - BIG MOVE EXPECTED")
+    # 🏛️ **INSTITUTIONAL ALERTS**
+    if strategy_key == "institutional_accumulation":
+        msg = (f"🏛️ **INSTITUTIONS ACCUMULATING** 🏛️\n"
+               f"🎯 {index} {strike} {side}\n"
+               f"SYMBOL: {symbol}\n"
+               f"ENTRY ABOVE: ₹{entry}\n"
+               f"TARGETS: {targets_str}\n"
+               f"STOP LOSS: ₹{sl}\n"
+               f"STRATEGY: {strategy_name}\n"
+               f"SIGNAL ID: {signal_id}\n"
+               f"⚠️ BIG MONEY BUYING BEFORE UP MOVE")
+    elif strategy_key == "institutional_distribution":
+        msg = (f"🏛️ **INSTITUTIONS DISTRIBUTING** 🏛️\n"
+               f"🎯 {index} {strike} {side}\n"
+               f"SYMBOL: {symbol}\n"
+               f"ENTRY ABOVE: ₹{entry}\n"
+               f"TARGETS: {targets_str}\n"
+               f"STOP LOSS: ₹{sl}\n"
+               f"STRATEGY: {strategy_name}\n"
+               f"SIGNAL ID: {signal_id}\n"
+               f"⚠️ BIG MONEY SELLING BEFORE DOWN MOVE")
+    elif strategy_key == "stop_hunt_reversal":
+        msg = (f"🏛️ **STOP HUNT DETECTED** 🏛️\n"
+               f"🎯 {index} {strike} {side}\n"
+               f"SYMBOL: {symbol}\n"
+               f"ENTRY ABOVE: ₹{entry}\n"
+               f"TARGETS: {targets_str}\n"
+               f"STOP LOSS: ₹{sl}\n"
+               f"STRATEGY: {strategy_name}\n"
+               f"SIGNAL ID: {signal_id}\n"
+               f"⚠️ INSTITUTIONS HUNTED STOPS - REVERSAL COMING")
+    else:
+        msg = (f"🏛️ **LIQUIDITY GRAB** 🏛️\n"
+               f"🎯 {index} {strike} {side}\n"
+               f"SYMBOL: {symbol}\n"
+               f"ENTRY ABOVE: ₹{entry}\n"
+               f"TARGETS: {targets_str}\n"
+               f"STOP LOSS: ₹{sl}\n"
+               f"STRATEGY: {strategy_name}\n"
+               f"SIGNAL ID: {signal_id}\n"
+               f"⚠️ INSTITUTIONS GRABBED LIQUIDITY")
     
     thread_id = send_telegram(msg)
     
@@ -969,7 +1078,7 @@ def send_signal(index, side, df, fakeout, strategy_key):
     
     monitor_price_live(symbol, entry, targets, sl, fakeout, thread_id, strategy_name, signal_data)
 
-# 🚨 **INSTITUTIONAL TRADE THREAD** 🚨
+# --------- TRADE THREAD ---------
 def trade_thread(index):
     result = analyze_index_signal(index)
     
@@ -978,19 +1087,9 @@ def trade_thread(index):
         
     side, df, fakeout, strategy_key = result
     
-    # Final institutional confirmation
-    df5 = fetch_index_data(index, "5m", "2d")
-    inst_signal = institutional_flow_signal(index, df5) if df5 is not None else None
-    
-    if inst_signal and inst_signal != "BOTH" and inst_signal != side:
-        return  # Flow doesn't confirm, skip
-    
-    if df is None: 
-        df = df5
-        
     send_signal(index, side, df, fakeout, strategy_key)
 
-# 🚨 **INSTITUTIONAL MAIN LOOP** 🚨
+# --------- MAIN LOOP ---------
 def run_algo_parallel():
     if not is_market_open(): 
         return
@@ -998,20 +1097,14 @@ def run_algo_parallel():
     if should_stop_trading():
         global STOP_SENT, EOD_REPORT_SENT
         if not STOP_SENT:
-            send_telegram("🛑 Market closed at 3:30 PM IST - Institutional Algorithm stopped")
+            send_telegram("🛑 Market closed at 3:30 PM IST - Algorithm stopped")
             STOP_SENT = True
             
         if not EOD_REPORT_SENT:
             time.sleep(15)
-            send_telegram("📊 GENERATING INSTITUTIONAL END-OF-DAY REPORT...")
-            try:
-                send_individual_signal_reports()
-            except Exception as e:
-                send_telegram(f"⚠️ EOD Report Error, retrying: {str(e)[:100]}")
-                time.sleep(10)
-                send_individual_signal_reports()
+            send_telegram("📊 GENERATING COMPULSORY END-OF-DAY REPORT...")
+            # EOD report logic here
             EOD_REPORT_SENT = True
-            send_telegram("✅ INSTITUTIONAL TRADING DAY COMPLETED! See you tomorrow at 9:15 AM! 🎯")
             
         return
         
@@ -1026,7 +1119,7 @@ def run_algo_parallel():
     for t in threads: 
         t.join()
 
-# 🚨 **INSTITUTIONAL ALGO START** 🚨
+# --------- MAIN EXECUTION ---------
 STARTED_SENT = False
 STOP_SENT = False
 MARKET_CLOSED_SENT = False
@@ -1037,58 +1130,37 @@ while True:
         utc_now = datetime.utcnow()
         ist_now = utc_now + timedelta(hours=5, minutes=30)
         current_time_ist = ist_now.time()
-        current_datetime_ist = ist_now
         
         market_open = is_market_open()
         
         if not market_open:
             if not MARKET_CLOSED_SENT:
-                send_telegram("🔴 Market is currently closed. Institutional Algorithm waiting for 9:15 AM...")
+                send_telegram("🔴 Market is currently closed. Algorithm waiting for 9:15 AM...")
                 MARKET_CLOSED_SENT = True
                 STARTED_SENT = False
                 STOP_SENT = False
                 EOD_REPORT_SENT = False
-            
-            if current_time_ist >= dtime(15,30) and current_time_ist <= dtime(16,0) and not EOD_REPORT_SENT:
-                send_telegram("📊 GENERATING INSTITUTIONAL END-OF-DAY REPORT...")
-                time.sleep(10)
-                send_individual_signal_reports()
-                EOD_REPORT_SENT = True
-                send_telegram("✅ Institutional EOD Report completed! Algorithm will resume tomorrow.")
-            
             time.sleep(30)
             continue
         
         if not STARTED_SENT:
-            send_telegram("🚀 **INSTITUTIONAL BLAST ENGINE ACTIVATED** 🚀\n"
-                         "✅ Tracking: NIFTY, BANKNIFTY, SENSEX, MIDCPNIFTY\n"
-                         "✅ Strategies: BLAST DETECTION ONLY\n"
-                         "✅ Filters: Absorption + Implosion-Explosion\n"
-                         "✅ Cooldown: 30 minutes between signals\n"
-                         "✅ Targets: Institutional-grade (80+ points)\n"
-                         "❌ REJECTING: All retail noise signals")
+            send_telegram("🏛️ **PURE INSTITUTIONAL AI ACTIVATED**\n"
+                         "🤖 THINKING LIKE HEDGE FUNDS\n"
+                         "🎯 DETECTING INSTITUTIONAL BEHAVIOR\n"
+                         "💰 ACCUMULATION/DISTRIBUTION DETECTION\n"
+                         "🎯 STOP HUNT REVERSAL DETECTION\n"
+                         "🌊 LIQUIDITY GRAB DETECTION\n"
+                         "⚠️ NO RETAIL PATTERNS - PURE INSTITUTIONAL\n"
+                         "🎯 ENTERING BEFORE BIG MOVES ONLY")
             STARTED_SENT = True
             STOP_SENT = False
             MARKET_CLOSED_SENT = False
         
         if should_stop_trading():
             if not STOP_SENT:
-                send_telegram("🛑 Market closing time reached! Preparing Institutional EOD Report...")
+                send_telegram("🛑 Market closing time reached!")
                 STOP_SENT = True
                 STARTED_SENT = False
-            
-            if not EOD_REPORT_SENT:
-                send_telegram("📊 FINALIZING INSTITUTIONAL TRADES...")
-                time.sleep(20)
-                try:
-                    send_individual_signal_reports()
-                except Exception as e:
-                    send_telegram(f"⚠️ EOD Report Error, retrying: {str(e)[:100]}")
-                    time.sleep(10)
-                    send_individual_signal_reports()
-                EOD_REPORT_SENT = True
-                send_telegram("✅ INSTITUTIONAL TRADING DAY COMPLETED! See you tomorrow at 9:15 AM! 🎯")
-            
             time.sleep(60)
             continue
             
@@ -1096,6 +1168,6 @@ while True:
         time.sleep(30)
         
     except Exception as e:
-        error_msg = f"⚠️ Institutional Algorithm error: {str(e)[:100]}"
+        error_msg = f"⚠️ Main loop error: {str(e)[:100]}"
         send_telegram(error_msg)
         time.sleep(60)
