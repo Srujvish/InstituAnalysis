@@ -1,25 +1,14 @@
-# Core Data & Trading
-yfinance
-pandas
-numpy
-ta
-
-# Machine Learning
-scikit-learn
-joblib
-
-# API & Brokerage
-smartapi-python
-requests
-
-# Security & Authentication
-pyotp
-pycryptodome
-
-# Utilities
-logzero
-multitasking
-websocket-client
-
-# Database (for peewee if using ORM)
-peewee
+yfinance>=0.2.66
+pandas>=2.3.3
+numpy>=2.0.2
+ta>=0.11.0
+scikit-learn>=1.3.0
+joblib>=1.3.0
+smartapi-python>=1.5.5
+requests>=2.32.5
+pyotp>=2.9.0
+pycryptodome>=3.23.0
+logzero>=1.7.0
+multitasking>=0.0.12
+websocket-client>=1.9.0
+peewee>=3.18.3
