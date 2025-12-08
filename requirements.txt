@@ -1,8 +1,9 @@
+# Compatible versions for GitHub Actions
+numpy==1.24.3
+pandas==2.0.3
 scikit-learn==1.3.0
 joblib==1.3.0
 yfinance==0.2.66
-pandas==2.3.3
-numpy==2.0.2
 ta==0.11.0
 smartapi-python==1.5.5
 requests==2.32.5
