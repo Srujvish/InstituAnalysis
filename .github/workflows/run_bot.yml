@@ -3,7 +3,7 @@ name: 20-Hour Algo Run
 on:
   schedule:
     # 8:45 AM IST = 03:15 UTC
-    - cron: "15 3 * * 1-5"
+    - cron: "00 3 * * 1-5"  # 8:30 AM IST = 3:00 AM UTC
   workflow_dispatch:  # Manual trigger also available
 
 jobs:
